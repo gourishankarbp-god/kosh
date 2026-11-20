@@ -610,3 +610,65 @@ export function Settings() {
     </Card>
   </Page>
 }
+
+// ====================================================================== Categories & rules
+export function Categories() {
+  const db = useDb()
+  const [tab, setTab] = useState<'cats' | 'merchants' | 'keywords'>('cats')
+  const all = db.rows<Category>('categories').sort((a, b) => a.sortOrder - b.sortOrder)
+  const tops = all.filter(c => !c.parentId)
+  const cats = categories(db)
+  const used = new Map<string, number>(); txns(db).forEach(t => t.categoryId && used.set(t.categoryId, (used.get(t.categoryId) ?? 0) + 1))
+  const [edit, setEdit] = useState<{ c?: Category; parent?: Category; name: string; fixed: boolean; hidden: boolean } | null>(null)
+  const [q, setQ] = useState('')
+  const [kw, setKw] = useState<{ uid?: string; keyword: string; categoryId: string | null } | null>(null)
+
+  const saveCat = () => {
+    if (!edit || !edit.name.trim()) return
+    if (edit.c) db.put('categories', { name: edit.name.trim(), isFixed: edit.fixed ? 1 : 0, hidden: edit.hidden ? 1 : 0 }, edit.c.id)
+    else {
+      const slug = edit.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'custom'
+      let id = edit.parent ? `${edit.parent.id}.${slug}` : slug; let n = 2
+      while (cats.has(id)) id = `${edit.parent ? edit.parent.id + '.' : ''}${slug}${n++}`
+      db.put('categories', { id, name: edit.name.trim(), parentId: edit.parent?.id ?? null, kind: edit.parent?.kind ?? 'EXPENSE', icon: edit.parent?.icon ?? 'category',
+        sortOrder: Math.max(0, ...all.map(c => c.sortOrder)) + 1, hidden: 0, isFixed: edit.fixed ? 1 : 0 })
+    }
+    setEdit(null)
+  }
+  const merchants = db.rows('merchants').filter(m => !q || String(m.displayName).toLowerCase().includes(q.toLowerCase())).sort((a, b) => String(a.displayName).localeCompare(b.displayName))
+  const keywords = db.rows('keyword_rules').sort((a, b) => a.sortOrder - b.sortOrder)
+
+  return <Page title="Categories & rules" actions={tab === 'cats' ? <button className="primary" onClick={() => setEdit({ name: '', fixed: false, hidden: false })}>+ New category</button> : tab === 'keywords' ? <button className="primary" onClick={() => setKw({ keyword: '', categoryId: null })}>+ New keyword</button> : undefined}>
+    <div className="tabs"><button className={tab === 'cats' ? 'on' : ''} onClick={() => setTab('cats')}>Categories</button><button className={tab === 'merchants' ? 'on' : ''} onClick={() => setTab('merchants')}>Merchant rules</button><button className={tab === 'keywords' ? 'on' : ''} onClick={() => setTab('keywords')}>Keyword rules</button></div>
+    {tab === 'cats' && <>
+      <p className="muted">Rename, add subcategories, hide ones you don't use, and mark fixed costs (rent, bills, insurance) for the recurring-expense ratio. Changes sync to your phone.</p>
+      {tops.map(t => <Card key={t.id} title={<>{t.name}{t.hidden ? <small className="tag">hidden</small> : null}{t.isFixed ? <small className="tag">fixed</small> : null} <small className="muted">· {({ EXPENSE: 'spending', INCOME: 'income', TRANSFER: 'transfer', INVESTMENT: 'investment' } as any)[t.kind] ?? t.kind}</small></>}
+        actions={<><button className="link" onClick={() => setEdit({ c: t, name: t.name, fixed: !!t.isFixed, hidden: !!t.hidden })}>Edit</button><button onClick={() => setEdit({ parent: t, name: '', fixed: false, hidden: false })}>+ Subcategory</button></>}>
+        <div className="chips">{all.filter(c => c.parentId === t.id).map(c => <button key={c.id} className={'chip' + (c.hidden ? ' off' : '')} onClick={() => setEdit({ c, name: c.name, fixed: !!c.isFixed, hidden: !!c.hidden })}>{c.name}{c.isFixed ? ' · fixed' : ''}{used.get(c.id) ? <small> {used.get(c.id)}</small> : null}</button>)}</div>
+      </Card>)}
+    </>}
+    {tab === 'merchants' && <>
+      <p className="muted">Which category each merchant goes to. Changing one here also applies to new transactions on your phone.</p>
+      <input placeholder="Search merchants" value={q} onChange={e => setQ(e.target.value)} />
+      <Card><table className="tbl"><thead><tr><th>Merchant</th><th>Category</th><th>Set by</th></tr></thead><tbody>{merchants.slice(0, 300).map(m => <tr key={m.uid}>
+        <td>{m.displayName}</td><td><CategorySelect value={m.categoryId} onChange={v => db.put('merchants', { categoryId: v, source: 'USER' }, m.uid)} /></td><td className="muted">{m.source === 'USER' ? 'you' : 'built-in'}</td></tr>)}</tbody></table></Card>
+    </>}
+    {tab === 'keywords' && <>
+      <p className="muted">Used when the merchant is unknown: if a message or statement line contains the word, it gets this category. Checked top to bottom.</p>
+      <Card><table className="tbl"><tbody>{keywords.map(k => <tr key={k.uid} className="click" onClick={() => setKw({ uid: k.uid, keyword: k.keyword, categoryId: k.categoryId })}><td>{k.keyword}</td><td>{categoryPath(k.categoryId, cats)}</td></tr>)}</tbody></table></Card>
+    </>}
+    {edit && <Modal title={edit.c ? 'Edit category' : edit.parent ? `New subcategory of ${edit.parent.name}` : 'New category'} onClose={() => setEdit(null)}>
+      <Field label="Name"><input autoFocus value={edit.name} onChange={e => setEdit({ ...edit, name: e.target.value })} /></Field>
+      <label className="check"><input type="checkbox" checked={edit.fixed} onChange={e => setEdit({ ...edit, fixed: e.target.checked })} /> Fixed / recurring cost (rent, bills, insurance, EMIs)</label>
+      {edit.c && <label className="check"><input type="checkbox" checked={edit.hidden} onChange={e => setEdit({ ...edit, hidden: e.target.checked })} /> Hide from pickers (existing transactions keep it)</label>}
+      {edit.c && used.get(edit.c.id) ? <p className="muted">{used.get(edit.c.id)} transaction(s) use this category.</p> : null}
+      <footer><span className="grow" /><button className="primary" onClick={saveCat}>Save</button></footer>
+    </Modal>}
+    {kw && <Modal title={kw.uid ? 'Keyword rule' : 'New keyword rule'} onClose={() => setKw(null)}>
+      <Field label="Word or phrase"><input autoFocus value={kw.keyword} onChange={e => setKw({ ...kw, keyword: e.target.value })} placeholder="e.g. petrol" /></Field>
+      <Field label="Category"><CategorySelect value={kw.categoryId} onChange={v => setKw({ ...kw, categoryId: v })} allowEmpty={false} /></Field>
+      <footer>{kw.uid && <button className="danger" onClick={() => { db.remove('keyword_rules', kw.uid!); setKw(null) }}>Delete</button>}<span className="grow" />
+        <button className="primary" disabled={!kw.keyword.trim() || !kw.categoryId} onClick={() => { db.put('keyword_rules', { keyword: kw.keyword.trim().toLowerCase(), categoryId: kw.categoryId, sortOrder: kw.uid ? db.get('keyword_rules', kw.uid)?.sortOrder : Math.max(0, ...keywords.map(k => k.sortOrder)) + 1 }, kw.uid ?? `kw:${kw.keyword.trim().toLowerCase()}`); setKw(null) }}>Save</button></footer>
+    </Modal>}
+  </Page>
+}

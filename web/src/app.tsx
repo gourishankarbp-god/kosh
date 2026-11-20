@@ -15,7 +15,7 @@ const ROUTES: [string, string, (p: { arg?: string }) => JSX.Element][] = [
   ['home', 'Home', P.Home], ['txns', 'Transactions', P.Transactions], ['review', 'Review', P.Review], ['accounts', 'Accounts', P.Accounts],
   ['cash', 'Cash', P.Cash], ['budgets', 'Budgets', P.Budgets], ['recurring', 'Recurring & due', P.Recurring], ['goals', 'Goals', P.Goals],
   ['policies', 'LIC, insurance & deposits', P.Policies], ['reports', 'Reports', P.Reports], ['import', 'Import', P.Import],
-  ['assistant', 'AI assistant', P.Assistant], ['archive', 'Archive', P.Archive], ['settings', 'Settings & sync', P.Settings],
+  ['assistant', 'AI assistant', P.Assistant], ['categories', 'Categories & rules', P.Categories], ['archive', 'Archive', P.Archive], ['settings', 'Settings & sync', P.Settings],
 ]
 
 function useRoute(): [string, string | undefined] {
