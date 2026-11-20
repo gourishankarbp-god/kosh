@@ -16,8 +16,8 @@ android {
         applicationId = "com.prash.kosh"
         minSdk = 26
         targetSdk = 35
-        versionCode = 6
-        versionName = "1.0.0"
+        versionCode = 7
+        versionName = "1.0.1"
     }
 
     // Your personal signing key. Keep keystore/ safe: every future update must be signed with it,
