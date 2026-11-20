@@ -1,0 +1,10 @@
+build/
+app/build/
+.gradle/
+local.properties
+keystore/
+*.jks
+signing.properties
+web/node_modules/
+web/dist/
+.idea/

@@ -1,0 +1,45 @@
+// Generated from the Android Room schema (app/schemas/.../3.json). Column names match the phone exactly.
+export type Col = { name: string; kind: 'int' | 'text' | 'real'; notNull: boolean; def?: string }
+export const TABLES: Record<string, { key: string; cols: Col[] }> = {
+  accounts: { key: 'id', cols: [{ name: 'name', kind: 'text', notNull: true }, { name: 'kind', kind: 'text', notNull: true }, { name: 'bank', kind: 'text', notNull: false }, { name: 'last4', kind: 'text', notNull: false }, { name: 'openingBalancePaise', kind: 'int', notNull: true }, { name: 'archived', kind: 'int', notNull: true }] },
+  categories: { key: 'id', cols: [{ name: 'id', kind: 'text', notNull: true }, { name: 'name', kind: 'text', notNull: true }, { name: 'parentId', kind: 'text', notNull: false }, { name: 'kind', kind: 'text', notNull: true }, { name: 'icon', kind: 'text', notNull: true }, { name: 'sortOrder', kind: 'int', notNull: true }, { name: 'hidden', kind: 'int', notNull: true }, { name: 'isFixed', kind: 'int', notNull: true, def: '0' }] },
+  merchants: { key: 'key', cols: [{ name: 'key', kind: 'text', notNull: true }, { name: 'displayName', kind: 'text', notNull: true }, { name: 'categoryId', kind: 'text', notNull: false }, { name: 'source', kind: 'text', notNull: true }, { name: 'aliases', kind: 'text', notNull: true }] },
+  keyword_rules: { key: 'id', cols: [{ name: 'keyword', kind: 'text', notNull: true }, { name: 'categoryId', kind: 'text', notNull: true }, { name: 'sortOrder', kind: 'int', notNull: true }] },
+  recurring_rules: { key: 'id', cols: [{ name: 'name', kind: 'text', notNull: true }, { name: 'type', kind: 'text', notNull: true }, { name: 'amountPaise', kind: 'int', notNull: true }, { name: 'categoryId', kind: 'text', notNull: false }, { name: 'merchantKey', kind: 'text', notNull: false }, { name: 'accountId', kind: 'int', notNull: false }, { name: 'frequency', kind: 'text', notNull: true }, { name: 'startDate', kind: 'text', notNull: true }, { name: 'nextDueDate', kind: 'text', notNull: true }, { name: 'lastPaidDate', kind: 'text', notNull: false }, { name: 'remindDaysBefore', kind: 'int', notNull: true }, { name: 'active', kind: 'int', notNull: true }] },
+  savings_goals: { key: 'id', cols: [{ name: 'name', kind: 'text', notNull: true }, { name: 'kind', kind: 'text', notNull: true }, { name: 'targetPaise', kind: 'int', notNull: true }, { name: 'targetDate', kind: 'text', notNull: false }, { name: 'createdAt', kind: 'int', notNull: true }, { name: 'archived', kind: 'int', notNull: true }] },
+  investments: { key: 'id', cols: [{ name: 'kind', kind: 'text', notNull: true }, { name: 'name', kind: 'text', notNull: true }, { name: 'institution', kind: 'text', notNull: false }, { name: 'refLast4', kind: 'text', notNull: false }, { name: 'startDate', kind: 'text', notNull: true }, { name: 'maturityDate', kind: 'text', notNull: false }, { name: 'ratePercent', kind: 'real', notNull: false }, { name: 'installmentPaise', kind: 'int', notNull: false }, { name: 'frequency', kind: 'text', notNull: true }, { name: 'sumAssuredPaise', kind: 'int', notNull: false }, { name: 'maturityAmountPaise', kind: 'int', notNull: false }, { name: 'matchKeywords', kind: 'text', notNull: true }, { name: 'status', kind: 'text', notNull: true }, { name: 'note', kind: 'text', notNull: false }] },
+  budgets: { key: 'categoryId', cols: [{ name: 'categoryId', kind: 'text', notNull: true }, { name: 'monthlyLimitPaise', kind: 'int', notNull: true }, { name: 'rollover', kind: 'int', notNull: true }, { name: 'startMonth', kind: 'text', notNull: true }] },
+  transactions: { key: 'id', cols: [{ name: 'type', kind: 'text', notNull: true }, { name: 'direction', kind: 'text', notNull: true }, { name: 'status', kind: 'text', notNull: true }, { name: 'amountPaise', kind: 'int', notNull: true }, { name: 'dateMillis', kind: 'int', notNull: true }, { name: 'accountId', kind: 'int', notNull: false }, { name: 'accountLast4', kind: 'text', notNull: false }, { name: 'merchantKey', kind: 'text', notNull: false }, { name: 'merchantName', kind: 'text', notNull: false }, { name: 'categoryId', kind: 'text', notNull: false }, { name: 'method', kind: 'text', notNull: true }, { name: 'reference', kind: 'text', notNull: false }, { name: 'note', kind: 'text', notNull: false }, { name: 'confidence', kind: 'int', notNull: true }, { name: 'sources', kind: 'text', notNull: true }, { name: 'linkedTxnId', kind: 'int', notNull: false }, { name: 'createdAt', kind: 'int', notNull: true }, { name: 'updatedAt', kind: 'int', notNull: true }, { name: 'recurringId', kind: 'int', notNull: false }, { name: 'toAccountId', kind: 'int', notNull: false }] },
+  transaction_splits: { key: 'id', cols: [{ name: 'transactionId', kind: 'int', notNull: true }, { name: 'categoryId', kind: 'text', notNull: true }, { name: 'amountPaise', kind: 'int', notNull: true }, { name: 'note', kind: 'text', notNull: false }] },
+  raw_messages: { key: 'id', cols: [{ name: 'source', kind: 'text', notNull: true }, { name: 'sender', kind: 'text', notNull: true }, { name: 'body', kind: 'text', notNull: true }, { name: 'receivedAt', kind: 'int', notNull: true }, { name: 'hash', kind: 'text', notNull: true }, { name: 'outcome', kind: 'text', notNull: true }, { name: 'ignoreReason', kind: 'text', notNull: false }, { name: 'confidence', kind: 'int', notNull: false }, { name: 'transactionId', kind: 'int', notNull: false }] },
+  audit_log: { key: 'id', cols: [{ name: 'transactionId', kind: 'int', notNull: true }, { name: 'at', kind: 'int', notNull: true }, { name: 'action', kind: 'text', notNull: true }, { name: 'before', kind: 'text', notNull: false }, { name: 'after', kind: 'text', notNull: false }] },
+  investment_entries: { key: 'id', cols: [{ name: 'investmentId', kind: 'int', notNull: true }, { name: 'kind', kind: 'text', notNull: true }, { name: 'amountPaise', kind: 'int', notNull: true }, { name: 'dateMillis', kind: 'int', notNull: true }, { name: 'transactionId', kind: 'int', notNull: false }, { name: 'note', kind: 'text', notNull: false }] },
+  goal_contributions: { key: 'id', cols: [{ name: 'goalId', kind: 'int', notNull: true }, { name: 'amountPaise', kind: 'int', notNull: true }, { name: 'dateMillis', kind: 'int', notNull: true }, { name: 'note', kind: 'text', notNull: false }] },
+  summaries: { key: 'id', cols: [{ name: 'month', kind: 'text', notNull: true }, { name: 'text', kind: 'text', notNull: true }, { name: 'source', kind: 'text', notNull: true }, { name: 'createdAt', kind: 'int', notNull: true }] },
+  documents: { key: 'id', cols: [{ name: 'investmentId', kind: 'int', notNull: true }, { name: 'name', kind: 'text', notNull: true }, { name: 'mime', kind: 'text', notNull: true }, { name: 'sizeBytes', kind: 'int', notNull: true }, { name: 'fileKey', kind: 'text', notNull: true }, { name: 'addedAt', kind: 'int', notNull: true }] },
+  archive_index: { key: 'month', cols: [{ name: 'month', kind: 'text', notNull: true }, { name: 'income', kind: 'int', notNull: true }, { name: 'expense', kind: 'int', notNull: true }, { name: 'refunds', kind: 'int', notNull: true }, { name: 'invested', kind: 'int', notNull: true }, { name: 'transfers', kind: 'int', notNull: true }, { name: 'recurring', kind: 'int', notNull: true }, { name: 'quickCommerce', kind: 'int', notNull: true }, { name: 'categoryTotalsJson', kind: 'text', notNull: true }, { name: 'transactionCount', kind: 'int', notNull: true }, { name: 'archivedAt', kind: 'int', notNull: true }] },
+}
+export const TABLE_ORDER = ["accounts", "categories", "merchants", "keyword_rules", "recurring_rules", "savings_goals", "investments", "budgets", "transactions", "transaction_splits", "raw_messages", "audit_log", "investment_entries", "goal_contributions", "summaries", "documents", "archive_index"]
+export const STRING_KEYED = new Set(['categories', 'merchants', 'budgets', 'archive_index'])
+/** Columns holding a reference to another table's record (as a uid in sync files). */
+export const REFS: Record<string, Record<string, string>> = {
+  transactions: { accountId: 'accounts', toAccountId: 'accounts', linkedTxnId: 'transactions', recurringId: 'recurring_rules' },
+  transaction_splits: { transactionId: 'transactions' },
+  raw_messages: { transactionId: 'transactions' },
+  audit_log: { transactionId: 'transactions' },
+  investment_entries: { investmentId: 'investments', transactionId: 'transactions' },
+  goal_contributions: { goalId: 'savings_goals' },
+  recurring_rules: { accountId: 'accounts' },
+  documents: { investmentId: 'investments' },
+}
+/** Fills NOT NULL columns the caller left out, so the phone can insert the record. */
+export function complete(table: string, r: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const c of TABLES[table].cols) {
+    const v = r[c.name]
+    if (v !== undefined && v !== null) out[c.name] = v
+    else if (c.notNull) out[c.name] = c.def !== undefined ? (c.kind === 'text' ? c.def : Number(c.def)) : c.kind === 'text' ? '' : 0
+    else out[c.name] = null
+  }
+  return out
+}
