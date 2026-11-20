@@ -1,5 +1,7 @@
 # Kosh — personal finance for Prash
 
+**Start here:** [docs/HANDOVER.md](docs/HANDOVER.md) — full documentation for anyone (person or AI) continuing the project.
+
 * **Android app** (`app/`): captures bank/UPI SMS and app alerts, screenshots (on-device OCR) and CSV statements; budgets, recurring payments, goals, LIC/insurance/bond/FD/RD payment tracking, cash, reports, AI assistant (Gemini, optional).
 * **Web app** (`web/`): the same data on a computer at https://gourishankarbp-god.github.io/kosh/ — plus Excel and PDF statement import.
 * **Sync**: encrypted files in a hidden Kosh folder in your own Google Drive (`drive.appdata` scope). AES-256-GCM, key from your passphrase (PBKDF2-SHA256, 210k rounds). Newest edit wins.
