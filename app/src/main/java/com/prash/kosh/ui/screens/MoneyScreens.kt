@@ -98,6 +98,7 @@ fun AccountsScreen(main: MainViewModel, onBack: () -> Unit, onOpenAccount: (Long
     val flows by main.repo.db.transactions().observeAccountFlows().collectAsState(initial = emptyList())
     val scope = rememberCoroutineScope()
     var editing by remember { mutableStateOf<AccountEntity?>(null) }
+    var fixing by remember { mutableStateOf<AccountEntity?>(null) }
     val byId = flows.associateBy { it.accountId }
     val sum = moneySummary(accounts, flows)
 
@@ -130,13 +131,62 @@ fun AccountsScreen(main: MainViewModel, onBack: () -> Unit, onOpenAccount: (Long
                             }
                             if (kind == "CARD") Text("Owed ${Money.format(outstandingOf(a, f), showPaise = false)}", fontWeight = FontWeight.SemiBold)
                             else Text(Money.format(balanceOf(a, f), showPaise = false), fontWeight = FontWeight.SemiBold)
-                            TextButton(onClick = { editing = a }) { Text("Edit") }
+                            Column(horizontalAlignment = Alignment.End) {
+                                TextButton(onClick = { fixing = a }) { Text("Correct") }
+                                TextButton(onClick = { editing = a }) { Text("Edit") }
+                            }
                         }
                     }
                 }
             }
         }
         item { OutlinedButton(onClick = { editing = AccountEntity(name = "", kind = "BANK") }) { Text("Add account") } }
+    }
+
+    fixing?.let { a ->
+        val f = byId[a.id]
+        val card = a.kind == "CARD"
+        val recorded = if (card) outstandingOf(a, f) else balanceOf(a, f)
+        var actual by remember(a) { mutableStateOf(paiseText(recorded)) }
+        var opening by remember(a) { mutableStateOf(false) }
+        val v = actual.trim().let { t -> if (t.startsWith("-")) Money.parseToPaise(t.drop(1))?.let { -it } else if (t == "0") 0L else Money.parseToPaise(t) }
+        val diff = v?.let { (if (card) -it else it) - balanceOf(a, f) } ?: 0L
+        AlertDialog(
+            onDismissRequest = { fixing = null },
+            title = { Text(if (card) "Correct amount owed" else "Correct balance") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Kosh shows ${Money.format(recorded)}${if (card) " owed" else ""}. Enter what your ${if (card) "card statement shows as outstanding" else "bank shows"} now.", fontSize = 13.sp)
+                    OutlinedTextField(actual, { actual = it }, label = { Text(if (card) "Actual amount owed (₹)" else "Actual balance (₹)") }, singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                    if (v != null && diff != 0L) Text("Difference ${Money.format(kotlin.math.abs(diff))}", fontSize = 12.sp)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        androidx.compose.material3.Switch(opening, { opening = it })
+                        Text("  Change the opening balance instead", fontSize = 13.sp)
+                    }
+                    Text(if (opening) "Use this if the starting figure was wrong." else "The difference is saved today as a balance adjustment: not income or spending, and past months stay unchanged.",
+                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            },
+            confirmButton = {
+                TextButton(enabled = v != null, onClick = {
+                    scope.launch {
+                        if (diff != 0L) {
+                            if (opening) main.repo.saveAccount(a.copy(openingBalancePaise = a.openingBalancePaise + diff))
+                            else {
+                                val now = System.currentTimeMillis()
+                                main.repo.addManual(TransactionEntity(type = "TRANSFER", direction = if (diff > 0) "CREDIT" else "DEBIT", status = "POSTED",
+                                    amountPaise = kotlin.math.abs(diff), dateMillis = now, accountId = a.id, accountLast4 = a.last4, categoryId = "transfers.adjust",
+                                    merchantName = "Balance adjustment", method = "OTHER",
+                                    note = if (card) "Amount owed corrected to match the card statement" else "Balance corrected to match the bank", createdAt = now, updatedAt = now))
+                            }
+                        }
+                        fixing = null
+                    }
+                }) { Text("Save") }
+            },
+            dismissButton = { TextButton(onClick = { fixing = null }) { Text("Cancel") } },
+        )
     }
 
     editing?.let { a ->

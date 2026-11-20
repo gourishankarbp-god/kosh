@@ -235,34 +235,76 @@ export function Review() {
 export function Accounts({ arg }: { arg?: string }) {
   const db = useDb(); const f = flows(db)
   const [edit, setEdit] = useState<Partial<Account> | null>(null)
+  const [fix, setFix] = useState<Account | null>(null)
   if (arg) {
     const a = db.get<Account>('accounts', arg)
     if (!a) return <Page title="Account"><Empty>Not found.</Empty></Page>
     const list = txns(db).filter(t => (t.accountId === arg || t.toAccountId === arg) && t.status !== 'REJECTED').sort((x, y) => y.dateMillis - x.dateMillis)
-    return <Page title={a.name} actions={<a href="#/accounts">← All accounts</a>}>
+    return <Page title={a.name} actions={<><a href="#/accounts">← All accounts</a><button className="primary" onClick={() => setFix(a)}>Correct balance</button></>}>
       <div className="stats"><Stat label={a.kind === 'CARD' ? 'Outstanding' : 'Balance'} value={money(a.kind === 'CARD' ? -balanceOf(a, f) : balanceOf(a, f))} /><Stat label="Opening balance" value={money(a.openingBalancePaise)} /></div>
-      <Card><TxnTable list={list} /></Card></Page>
+      <Card><TxnTable list={list} /></Card>
+      {fix && <BalanceFixer a={fix} onClose={() => setFix(null)} />}</Page>
   }
   const list = accounts(db)
   return <Page title="Accounts" actions={<button className="primary" onClick={() => setEdit({ kind: 'BANK', openingBalancePaise: 0 })}>+ Add account</button>}>
     <p className="muted">Balances = opening balance + money in − money out from saved transactions. Transfers (ATM withdrawals, card bill payments) move money between accounts and are not spending or income.</p>
     <Card><table className="tbl"><thead><tr><th>Account</th><th>Type</th><th className="r">Balance / owed</th><th /></tr></thead>
       <tbody>{list.map(a => <tr key={a.uid}><td><a href={'#/accounts/' + a.uid}>{a.name}</a></td><td>{({ BANK: 'Bank', CARD: 'Credit card', CASH: 'Cash', WALLET: 'Wallet' } as any)[a.kind] ?? a.kind}</td>
-        <td className="r">{a.kind === 'CARD' ? `${money(-balanceOf(a, f))} owed` : money(balanceOf(a, f))}</td><td className="r"><button className="link" onClick={() => setEdit(a)}>Edit</button></td></tr>)}</tbody></table></Card>
+        <td className="r">{a.kind === 'CARD' ? `${money(-balanceOf(a, f))} owed` : money(balanceOf(a, f))}</td><td className="r nowrap"><button onClick={() => setFix(a)}>Correct balance</button> <button className="link" onClick={() => setEdit(a)}>Edit</button></td></tr>)}</tbody></table></Card>
     {edit && <AccountEditor a={edit} onClose={() => setEdit(null)} />}
+    {fix && <BalanceFixer a={fix} onClose={() => setFix(null)} />}
   </Page>
 }
+/**
+ * Fixes a balance (or a card's amount owed) that does not match the bank. Default: records the
+ * difference as a "Balance adjustment" transfer dated today, so past months stay as they were and
+ * nothing is counted as income or spending. Alternative: change the opening balance instead.
+ */
+function BalanceFixer({ a, onClose }: { a: Account; onClose: () => void }) {
+  const db = useDb(); const f = flows(db)
+  const card = a.kind === 'CARD'
+  const recorded = card ? -balanceOf(a, f) : balanceOf(a, f)
+  const [actual, setActual] = useState(String(recorded / 100)); const [date, setDate] = useState(istDate(Date.now()))
+  const [how, setHow] = useState<'adjust' | 'opening'>('adjust'); const [note, setNote] = useState('')
+  const val = Math.round(Number(actual.replace(/[,₹\s]/g, '')) * 100)
+  const ok = actual.trim() !== '' && isFinite(val)
+  const diffBalance = ok ? (card ? -val : val) - balanceOf(a, f) : 0
+  const save = () => {
+    if (!ok || diffBalance === 0) return onClose()
+    const now = Date.now()
+    if (how === 'opening') db.put('accounts', { openingBalancePaise: a.openingBalancePaise + diffBalance }, a.uid)
+    else {
+      const t = { type: 'TRANSFER', direction: diffBalance > 0 ? 'CREDIT' : 'DEBIT', status: 'POSTED', amountPaise: Math.abs(diffBalance), dateMillis: fromIstDate(date),
+        accountId: a.uid, accountLast4: a.last4, categoryId: 'transfers.adjust', method: 'OTHER', merchantName: 'Balance adjustment',
+        note: note || (card ? 'Amount owed corrected to match the card statement' : 'Balance corrected to match the bank'), sources: 'MANUAL', confidence: 100, createdAt: now, updatedAt: now }
+      const id = db.put('transactions', t)
+      db.put('audit_log', { transactionId: id, at: now, action: 'CREATED', before: null, after: JSON.stringify(t) })
+    }
+    onClose()
+  }
+  return <Modal title={`Correct ${card ? 'amount owed' : 'balance'} · ${a.name}`} onClose={onClose}>
+    <p>Kosh shows <b>{money(recorded)}</b>{card ? ' owed' : ''}. Enter what your {card ? 'card statement or app shows as outstanding' : 'bank shows'} right now.</p>
+    <Field label={card ? 'Actual amount owed (₹)' : 'Actual balance (₹)'}><input autoFocus inputMode="decimal" value={actual} onChange={e => setActual(e.target.value)} /></Field>
+    {ok && diffBalance !== 0 && <p className="muted">Difference: {money(Math.abs(diffBalance))} {card ? (diffBalance > 0 ? 'less owed' : 'more owed') : (diffBalance > 0 ? 'more in the account' : 'less in the account')}.</p>}
+    <label className="check"><input type="radio" checked={how === 'adjust'} onChange={() => setHow('adjust')} /> Record the difference as a balance adjustment (recommended — keeps past months unchanged; not counted as income or spending)</label>
+    {how === 'adjust' && <div className="grid2"><Field label="Date"><input type="date" value={date} onChange={e => setDate(e.target.value)} /></Field><Field label="Note (optional)"><input value={note} onChange={e => setNote(e.target.value)} /></Field></div>}
+    <label className="check"><input type="radio" checked={how === 'opening'} onChange={() => setHow('opening')} /> Change the opening balance instead (use if the starting figure was wrong)</label>
+    <p className="muted">Saved here, this reaches your phone at its next sync.</p>
+    <footer><span className="grow" /><button className="primary" disabled={!ok} onClick={save}>Save</button></footer>
+  </Modal>
+}
+
 function AccountEditor({ a, onClose }: { a: Partial<Account>; onClose: () => void }) {
   const db = useDb()
-  const [x, setX] = useState(a); const [ob, setOb] = useState(String((a.openingBalancePaise ?? 0) / 100))
+  const [x, setX] = useState(a); const [ob, setOb] = useState(String((a.kind === 'CARD' ? -1 : 1) * (a.openingBalancePaise ?? 0) / 100))
   return <Modal title={a.uid ? 'Edit account' : 'Add account'} onClose={onClose}>
     <Field label="Name"><input value={x.name ?? ''} onChange={e => setX({ ...x, name: e.target.value })} placeholder="HDFC ••4821" /></Field>
     <Field label="Type"><select value={x.kind} onChange={e => setX({ ...x, kind: e.target.value })}><option value="BANK">Bank account</option><option value="CARD">Credit card</option><option value="WALLET">Wallet</option><option value="CASH">Cash</option></select></Field>
     <Field label="Bank"><input value={x.bank ?? ''} onChange={e => setX({ ...x, bank: e.target.value || null })} /></Field>
     <Field label="Last 4 digits (only these are stored)"><input maxLength={4} value={x.last4 ?? ''} onChange={e => setX({ ...x, last4: e.target.value.replace(/\D/g, '') || null })} /></Field>
-    <Field label={x.kind === 'CARD' ? 'Opening amount owed (enter as negative, e.g. -12000)' : 'Opening balance (₹)'}><input value={ob} onChange={e => setOb(e.target.value)} /></Field>
+    <Field label={x.kind === 'CARD' ? 'Amount owed when you started using Kosh (₹)' : 'Opening balance when you started using Kosh (₹)'}><input value={ob} onChange={e => setOb(e.target.value)} /></Field>
     <footer>{a.uid && <button className="danger" onClick={() => { db.put('accounts', { archived: 1 }, a.uid); onClose() }}>Hide account</button>}<span className="grow" />
-      <button className="primary" disabled={!x.name} onClick={() => { db.put('accounts', { ...x, openingBalancePaise: Math.round(Number(ob.replace(/[,₹\s]/g, '') || 0) * 100), archived: 0 }, a.uid); onClose() }}>Save</button></footer>
+      <button className="primary" disabled={!x.name} onClick={() => { db.put('accounts', { ...x, openingBalancePaise: (x.kind === 'CARD' ? -1 : 1) * Math.round(Number(ob.replace(/[,₹\s]/g, '') || 0) * 100), archived: 0 }, a.uid); onClose() }}>Save</button></footer>
   </Modal>
 }
 
