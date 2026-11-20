@@ -64,7 +64,22 @@ open class Gemini(private val key: () -> String?, private val model: () -> Strin
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    open suspend fun generate(system: String, prompt: String, jsonOut: Boolean = false, maxTokens: Int = 2048): String = withContext(Dispatchers.IO) {
+    /** Tries the chosen model, retrying once when Google is busy (503/500), then the other free models. */
+    open suspend fun generate(system: String, prompt: String, jsonOut: Boolean = false, maxTokens: Int = 2048): String {
+        val models = listOf(model()) + listOf("gemini-flash-latest", "gemini-2.5-flash", "gemini-flash-lite-latest", "gemini-2.5-flash-lite").filter { it != model() }
+        var last: ApiError? = null
+        for (m in models) for (attempt in 0..1) {
+            try { return call(m, system, prompt, jsonOut, maxTokens) } catch (e: ApiError) {
+                last = e
+                if (e.code == 400 || e.code == 403) throw e
+                if ((e.code == 503 || e.code == 500) && attempt == 0) { kotlinx.coroutines.delay(2000); continue }
+                break
+            }
+        }
+        throw ApiError(last?.code ?: 503, (if (last?.code == 503 || last?.code == 500) "Google's Gemini servers are busy right now" else last?.message ?: "Gemini unavailable") + ". Try again in a few minutes.")
+    }
+
+    private suspend fun call(modelName: String, system: String, prompt: String, jsonOut: Boolean, maxTokens: Int): String = withContext(Dispatchers.IO) {
         val k = key() ?: throw NotConfigured()
         val body = buildJsonObject {
             putJsonObject("systemInstruction") { putJsonArray("parts") { add(buildJsonObject { put("text", system) }) } }
@@ -74,7 +89,7 @@ open class Gemini(private val key: () -> String?, private val model: () -> Strin
                 if (jsonOut) put("responseMimeType", "application/json")
             }
         }
-        val c = (URL("https://generativelanguage.googleapis.com/v1beta/models/${model()}:generateContent").openConnection() as HttpURLConnection).apply {
+        val c = (URL("https://generativelanguage.googleapis.com/v1beta/models/$modelName:generateContent").openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"; doOutput = true; connectTimeout = 20_000; readTimeout = 90_000
             setRequestProperty("Content-Type", "application/json"); setRequestProperty("x-goog-api-key", k)
         }
@@ -84,8 +99,8 @@ open class Gemini(private val key: () -> String?, private val model: () -> Strin
             val err = c.errorStream?.bufferedReader()?.readText().orEmpty()
             throw ApiError(code, when (code) {
                 400, 403 -> "The Gemini key was not accepted. Check it in AI assistant settings."
-                404 -> "Model '${model()}' not found. Pick another model in AI assistant settings."
-                429 -> "Free-tier limit reached for now. Try again in a minute (or tomorrow if the daily limit is used up)."
+                404 -> "Model '$modelName' not found"
+                429 -> "Free-tier limit reached for now"
                 else -> "Gemini error $code: ${err.take(200)}"
             })
         }

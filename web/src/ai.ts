@@ -23,16 +23,30 @@ export const aiSettings = {
 const SYSTEM = 'You are Kosh, a careful personal-finance assistant for one user in India. Amounts are Indian rupees (₹). Financial year runs April to March. ' +
   'Personal identifiers have been removed on purpose; never ask for them. Never ask for or mention passwords, PINs or OTPs. Be brief and concrete.'
 
+const FALLBACKS = ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-flash-lite-latest', 'gemini-2.5-flash-lite']
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+
+/** Calls Gemini; when Google is busy (503/500) it retries once, then tries the next free model. */
 export async function gemini(prompt: string, json = false, maxTokens = 1500): Promise<string> {
   const key = aiSettings.key; if (!key) throw new Error('Add a Gemini API key in Settings → AI.')
-  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${aiSettings.model}:generateContent`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-    body: JSON.stringify({ systemInstruction: { parts: [{ text: SYSTEM }] }, contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.2, maxOutputTokens: maxTokens, ...(json ? { responseMimeType: 'application/json' } : {}) } }),
-  })
-  if (!r.ok) throw new Error(r.status === 429 ? 'Free-tier limit reached for now; try again in a minute.' : r.status === 404 ? `Model ${aiSettings.model} not found — pick another in Settings.` : r.status === 400 || r.status === 403 ? 'Gemini key not accepted.' : `Gemini error ${r.status}`)
-  const j = await r.json()
-  return (j.candidates?.[0]?.content?.parts ?? []).map((p: any) => p.text ?? '').join('')
+  const models = [aiSettings.model, ...FALLBACKS.filter(m => m !== aiSettings.model)]
+  let last = ''
+  for (const model of models) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+        body: JSON.stringify({ systemInstruction: { parts: [{ text: SYSTEM }] }, contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.2, maxOutputTokens: maxTokens, ...(json ? { responseMimeType: 'application/json' } : {}) } }),
+      })
+      if (r.ok) { const j = await r.json(); return (j.candidates?.[0]?.content?.parts ?? []).map((p: any) => p.text ?? '').join('') }
+      if (r.status === 400 || r.status === 403) throw new Error('Gemini key not accepted — check it in Settings → AI.')
+      if (r.status === 503 || r.status === 500) { last = 'Google\'s Gemini servers are busy right now'; if (attempt === 0) { await sleep(2000); continue } break }
+      if (r.status === 429) { last = 'Free-tier limit reached for now'; break }
+      if (r.status === 404) { last = `Model ${model} not found`; break }
+      throw new Error(`Gemini error ${r.status}`)
+    }
+  }
+  throw new Error(`${last}. Try again in a few minutes.`)
 }
 
 /** Aggregates only: monthly totals, categories, top merchants. No account numbers, no message text. */
