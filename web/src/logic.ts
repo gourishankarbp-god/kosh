@@ -47,7 +47,24 @@ export const txns = (db: LocalDb) => db.rows<Txn>('transactions')
 export const counted = (t: Txn) => t.status === 'POSTED'
 export const inMonth = (t: Txn, ym: string) => istMonth(t.dateMillis) === ym
 export const categories = (db: LocalDb) => new Map(db.rows<Category>('categories').map(c => [c.id, c]))
-export const accounts = (db: LocalDb) => db.rows<Account>('accounts').filter(a => !a.archived).sort((a, b) => a.name.localeCompare(b.name))
+// Loans and debit cards are stored as ordinary WALLET accounts, tagged in the `bank` column, so the phone app syncs them without any change:
+//   loan:        bank = 'Lent' | 'Borrowed'  (balance = money still owed to you / by you)
+//   debit card:  bank = 'debit:<uid of the linked bank account>'  (never holds money; spending is charged to the linked account)
+export const DEBIT_PREFIX = 'debit:'
+export const isLoanAcct = (a: Account) => a.kind === 'WALLET' && (a.bank === 'Lent' || a.bank === 'Borrowed')
+export const isDebitCard = (a: Account) => a.kind === 'WALLET' && !!a.bank?.startsWith(DEBIT_PREFIX)
+/** Real money accounts (bank, credit card, cash, wallet): no loan books, no debit cards. */
+export const accounts = (db: LocalDb) => db.rows<Account>('accounts').filter(a => !a.archived && !isLoanAcct(a) && !isDebitCard(a)).sort((a, b) => a.name.localeCompare(b.name))
+export const debitCards = (db: LocalDb) => db.rows<Account>('accounts').filter(a => !a.archived && isDebitCard(a)).sort((a, b) => a.name.localeCompare(b.name))
+export const debitCardLink = (db: LocalDb, a: Account): Account | undefined => { const l = db.get<Account>('accounts', a.bank?.slice(DEBIT_PREFIX.length)); return l && !l.archived ? l : undefined }
+/** Paying with a debit card is paying from the account it is linked to. Returns the account to charge, or null when the card has no usable link. */
+export function resolveSpendAccount(db: LocalDb, uid: string | null | undefined): { accountId: string | null; accountLast4: string | null; card?: Account; linkMissing?: boolean } {
+  const a = uid ? db.get<Account>('accounts', uid) : undefined
+  if (!a) return { accountId: uid ?? null, accountLast4: null }
+  if (!isDebitCard(a)) return { accountId: a.uid, accountLast4: a.last4 }
+  const l = debitCardLink(db, a)
+  return l ? { accountId: l.uid, accountLast4: l.last4, card: a } : { accountId: null, accountLast4: null, card: a, linkMissing: true }
+}
 export const cashAccount = (db: LocalDb) => db.rows<Account>('accounts').find(a => a.kind === 'CASH')
 
 export function categoryPath(id: string | null, cats: Map<string, Category>) {

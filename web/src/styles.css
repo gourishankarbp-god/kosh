@@ -78,3 +78,5 @@ button { transition: background .15s, transform .1s, box-shadow .15s } button:ac
 @keyframes toastIn { from { opacity: 0; transform: translateX(24px) } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important } }
 @media (max-width: 860px) { .side a.on::before { display: none } .toasts { left: 12px; right: 12px } }
+
+.loan .row { margin-top: 12px } .loan header { align-items: baseline } .loan .bar { margin: 6px 0 }

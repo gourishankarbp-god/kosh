@@ -6,8 +6,10 @@ import {
   accounts, accountLabel, addMonths, balanceOf, budgetImpact, budgetStatus, byTopCategory, cashAccount, categories, categoryPath, compact, counted, csvEscape,
   downloadText, expenseLines, flows, fmtDay, fromIstDate, fyLabel, fyMonths, fyStart, greeting, inMonth, investmentHistory, istDate, METHODS, money,
   monthLabel, monthRange, monthTotals, moneySummary, nextDue, parseRupees, PLAN_KINDS, REVIEW_STATUSES, thisMonth, totals, txns, TYPES, FREQUENCIES,
+  debitCards, debitCardLink, isDebitCard, resolveSpendAccount,
   type Account, type Category, type Txn,
 } from './logic'
+import { loanList, createLoan, loanMove, closeLoan, reopenLoan, type Loan, type LoanKind, type LoanStep } from './loans'
 import { readStatement, type StmtRow } from './statement'
 import { importRows, readScreenshot } from './importer'
 import * as AI from './ai'
@@ -26,7 +28,7 @@ function Modal({ title, onClose, children, wide }: { title: string; onClose: () 
   return <div className="modal-bg" onMouseDown={e => e.target === e.currentTarget && onClose()}><div className={'modal' + (wide ? ' wide' : '')}><header><h3>{title}</h3><button className="link" onClick={onClose}>✕</button></header>{children}</div></div>
 }
 const Field = ({ label, children }: { label: string; children: ReactNode }) => <label className="field"><span>{label}</span>{children}</label>
-const Bar = ({ pct, warn }: { pct: number; warn?: boolean }) => <div className="bar"><i style={{ width: Math.min(100, pct) + '%' }} className={warn || pct >= 100 ? 'warn' : pct >= 80 ? 'amber' : ''} /></div>
+const Bar = ({ pct, warn, ok }: { pct: number; warn?: boolean; ok?: boolean }) => <div className="bar"><i style={{ width: Math.min(100, pct) + '%' }} className={ok ? '' : warn || pct >= 100 ? 'warn' : pct >= 80 ? 'amber' : ''} /></div>
 
 /** Shown while adding/editing an expense: how it moves the matching budget(s). */
 function BudgetImpact({ lines, dateMillis, exclude, counts }: { lines: { categoryId: string; amountPaise: number }[]; dateMillis: number; exclude?: string; counts: boolean }) {
@@ -54,10 +56,11 @@ function CategorySelect({ value, onChange, kinds, allowEmpty }: { value: string 
     {tops.map(t => <optgroup key={t.id} label={t.name}><option value={t.id}>{t.name}</option>{all.filter(c => c.parentId === t.id).map(c => <option key={c.id} value={c.id}>{t.name} › {c.name}</option>)}</optgroup>)}
   </select>
 }
-function AccountSelect({ value, onChange, empty = 'None', kinds }: { value: string | null; onChange: (v: string | null) => void; empty?: string; kinds?: string[] }) {
+function AccountSelect({ value, onChange, empty = 'None', kinds, cards }: { value: string | null; onChange: (v: string | null) => void; empty?: string; kinds?: string[]; cards?: boolean }) {
   const db = useDb()
   return <select value={value ?? ''} onChange={e => onChange(e.target.value || null)}><option value="">{empty}</option>
-    {accounts(db).filter(a => !kinds || kinds.includes(a.kind)).map(a => <option key={a.uid} value={a.uid}>{a.name}</option>)}</select>
+    {accounts(db).filter(a => !kinds || kinds.includes(a.kind)).map(a => <option key={a.uid} value={a.uid}>{a.name}</option>)}
+    {cards && debitCards(db).length > 0 && <optgroup label="Debit cards (charged to the linked bank account)">{debitCards(db).map(a => <option key={a.uid} value={a.uid}>{a.name}</option>)}</optgroup>}</select>
 }
 
 const typeLabel = (t: string) => ({ EXPENSE: 'Expense', INCOME: 'Income', TRANSFER: 'Transfer', REFUND: 'Refund', INVESTMENT: 'Investment' } as any)[t] ?? t
@@ -90,16 +93,31 @@ export function TxnEditor({ uid, initial, onClose }: { uid?: string; initial?: P
   const [splits, setSplits] = useState<{ categoryId: string | null; amt: string; uid?: string }[]>(existingSplits.map(s => ({ categoryId: s.categoryId, amt: String(s.amountPaise / 100), uid: s.uid })))
   const [learn, setLearn] = useState(false)
   const [err, setErr] = useState('')
+  const [person, setPerson] = useState('')
   const set = (p: Partial<Txn>) => setT(x => ({ ...x, ...p }))
+  // "Lent" / "Borrowed" are choices in the Type list for new entries; they are saved as a tracked loan, not as a transaction type.
+  const loanMode = !uid && (t.type === 'LENT' || t.type === 'BORROWED')
+  const picked = t.accountId ? db.get<Account>('accounts', t.accountId) : undefined
+  const cardLink = picked && isDebitCard(picked) ? debitCardLink(db, picked) : undefined
   const amountPaise = parseRupees(amt) ?? 0
   const splitSum = splits.reduce((s, x) => s + (parseRupees(x.amt) ?? 0), 0)
 
   const save = (status?: string) => {
     if (!amountPaise) return setErr('Enter an amount.')
     if (splits.length && splitSum !== amountPaise) return setErr(`Split parts add up to ${money(splitSum)}, not ${money(amountPaise)}.`)
+    if (loanMode) {
+      if (!person.trim()) return setErr("Enter the person's name.")
+      if (!t.accountId) return setErr(t.type === 'LENT' ? 'Choose the account you paid from.' : 'Choose the account the money came into.')
+      try { createLoan(db, t.type as LoanKind, person, { amountPaise, dateMillis: t.dateMillis!, accountId: t.accountId, method: t.method ?? 'UPI', note: t.note }) } catch (e: any) { return setErr(e.message) }
+      toast(t.type === 'LENT' ? `Lent ${money(amountPaise, { paise: false })} to ${person.trim()} — track it under Plan › Loans` : `Borrowed ${money(amountPaise, { paise: false })} from ${person.trim()} — track it under Plan › Loans`)
+      return onClose()
+    }
+    // Paying with a debit card means paying from the bank account it is linked to.
+    const spend = t.type === 'TRANSFER' ? undefined : resolveSpendAccount(db, t.accountId)
+    if (spend?.linkMissing) return setErr('This debit card is not linked to a bank account any more. Edit the card under Money › Accounts.')
     const now = Date.now()
     const direction = t.type === 'INCOME' || t.type === 'REFUND' ? 'CREDIT' : t.type === 'TRANSFER' ? (t.direction ?? 'DEBIT') : 'DEBIT'
-    const row = { ...t, amountPaise, direction, status: status ?? t.status ?? 'POSTED', updatedAt: now, createdAt: t.createdAt ?? now, sources: t.sources ?? 'MANUAL', confidence: t.confidence ?? 100 }
+    const row = { ...t, ...(spend?.card ? { accountId: spend.accountId, accountLast4: spend.accountLast4 } : {}), amountPaise, direction, status: status ?? t.status ?? 'POSTED', updatedAt: now, createdAt: t.createdAt ?? now, sources: t.sources ?? 'MANUAL', confidence: t.confidence ?? 100 }
     const id = db.put('transactions', row, uid)
     const mainLines = splits.length ? splits.map(s => ({ categoryId: s.categoryId ?? 'other', amountPaise: parseRupees(s.amt) ?? 0 })) : [{ categoryId: row.categoryId ?? 'other', amountPaise }]
     if (row.type === 'EXPENSE' && row.status === 'POSTED') {
@@ -125,17 +143,22 @@ export function TxnEditor({ uid, initial, onClose }: { uid?: string; initial?: P
   const raws = uid ? db.rows('raw_messages').filter(r => r.transactionId === uid) : []
   return <Modal title={uid ? 'Edit transaction' : 'Add transaction'} onClose={onClose} wide>
     <div className="grid2">
-      <Field label="Type"><select value={t.type} onChange={e => set({ type: e.target.value })}>{TYPES.map(x => <option key={x} value={x}>{typeLabel(x)}</option>)}</select></Field>
+      <Field label="Type"><select value={t.type} onChange={e => set({ type: e.target.value })}>{TYPES.map(x => <option key={x} value={x}>{typeLabel(x)}</option>)}{!uid && <><option value="LENT">Lent (I gave money to someone)</option><option value="BORROWED">Borrowed (I took money from someone)</option></>}</select></Field>
       <Field label="Amount (₹)"><input inputMode="decimal" value={amt} onChange={e => setAmt(e.target.value)} autoFocus={!uid} /></Field>
       <Field label="Date"><input type="date" value={istDate(t.dateMillis!)} onChange={e => e.target.value && set({ dateMillis: fromIstDate(e.target.value) })} /></Field>
-      <Field label="Method"><select value={t.method} onChange={e => { const m = e.target.value; const cash = m === 'CASH' && t.type === 'EXPENSE' ? cashAccount(db) : undefined; set(cash ? { method: m, accountId: cash.uid, accountLast4: null } : { method: m }) }}>{METHODS.map(m => <option key={m}>{m}</option>)}</select></Field>
-      <Field label={t.type === 'TRANSFER' ? 'From account' : 'Account'}><AccountSelect value={t.accountId ?? null} onChange={v => set({ accountId: v, accountLast4: v ? db.get<Account>('accounts', v)?.last4 ?? null : null })} /></Field>
+      <Field label="Method"><select value={t.method} onChange={e => { const m = e.target.value; const cash = m === 'CASH' && (t.type === 'EXPENSE' || loanMode) ? cashAccount(db) : undefined; set(cash ? { method: m, accountId: cash.uid, accountLast4: null } : { method: m }) }}>{METHODS.map(m => <option key={m}>{m}</option>)}</select></Field>
+      <Field label={loanMode ? (t.type === 'LENT' ? 'Paid from account' : 'Received into account') : t.type === 'TRANSFER' ? 'From account' : 'Account'}><AccountSelect cards={t.type !== 'TRANSFER' && !loanMode} value={t.accountId ?? null}
+        onChange={v => { const a = v ? db.get<Account>('accounts', v) : undefined; set({ accountId: v, accountLast4: a && !isDebitCard(a) ? a.last4 : null, ...(a && isDebitCard(a) ? { method: 'CARD' } : {}) }) }} /></Field>
       {t.type === 'TRANSFER' && <Field label="To account (cash, card, own account)"><AccountSelect value={t.toAccountId ?? null} onChange={v => set({ toAccountId: v })} /></Field>}
-      <Field label="Merchant / payee"><input value={t.merchantName ?? ''} onChange={e => set({ merchantName: e.target.value || null })} /></Field>
-      <Field label="Category"><CategorySelect value={t.categoryId ?? null} onChange={v => set({ categoryId: v })} /></Field>
-      <Field label="Note"><input value={t.note ?? ''} onChange={e => set({ note: e.target.value || null })} /></Field>
-      <Field label="Status"><select value={t.status} onChange={e => set({ status: e.target.value })}>{['POSTED', ...REVIEW_STATUSES, 'REJECTED'].map(s => <option key={s} value={s}>{statusLabel(s)}</option>)}</select></Field>
+      {loanMode && <Field label={t.type === 'LENT' ? 'Lent to (person)' : 'Borrowed from (person)'}><input value={person} onChange={e => setPerson(e.target.value)} placeholder="Name" /></Field>}
+      {!loanMode && <Field label="Merchant / payee"><input value={t.merchantName ?? ''} onChange={e => set({ merchantName: e.target.value || null })} /></Field>}
+      {!loanMode && <Field label="Category"><CategorySelect value={t.categoryId ?? null} onChange={v => set({ categoryId: v })} /></Field>}
+      <Field label="Note"><input value={t.note ?? ''} onChange={e => set({ note: e.target.value || null })} placeholder={loanMode ? 'What it was for, when it is due…' : ''} /></Field>
+      {!loanMode && <Field label="Status"><select value={t.status} onChange={e => set({ status: e.target.value })}>{['POSTED', ...REVIEW_STATUSES, 'REJECTED'].map(s => <option key={s} value={s}>{statusLabel(s)}</option>)}</select></Field>}
     </div>
+    {cardLink && <p className="muted">Debit card payment — charged to {cardLink.name}.</p>}
+    {picked && isDebitCard(picked) && !cardLink && <p className="err">This debit card has no linked bank account. Edit it under Money › Accounts.</p>}
+    {loanMode && <p className="muted">{t.type === 'LENT' ? 'Saved as a loan you can track and close under Plan › Loans. It is not counted as spending, and your account balance goes down by this amount until it is paid back.' : 'Saved as a loan you can track and close under Plan › Loans. It is not counted as income.'}</p>}
     {t.type === 'EXPENSE' && amountPaise > 0 && <BudgetImpact exclude={uid} counts={(t.status ?? 'POSTED') === 'POSTED'} dateMillis={t.dateMillis!}
       lines={splits.length ? splits.map(s => ({ categoryId: s.categoryId ?? 'other', amountPaise: parseRupees(s.amt) ?? 0 })) : [{ categoryId: t.categoryId ?? 'other', amountPaise }]} />}
     {t.merchantKey && t.categoryId !== orig?.categoryId && <label className="check"><input type="checkbox" checked={learn} onChange={e => setLearn(e.target.checked)} /> Always use this category for {t.merchantName}</label>}
@@ -166,6 +189,9 @@ export function Home() {
   const review = txns(db).filter(t => REVIEW_STATUSES.includes(t.status)).length
   const recent = txns(db).filter(t => t.status !== 'REJECTED').sort((a, b) => b.dateMillis - a.dateMillis).slice(0, 8)
   const budgets = budgetStatus(db, thisMonth()).slice(0, 4)
+  const openLoans = loanList(db).filter(l => !l.closed)
+  const owedToMe = openLoans.filter(l => l.kind === 'LENT').reduce((a, l) => a + Math.max(0, l.pending), 0)
+  const iOwe = openLoans.filter(l => l.kind === 'BORROWED').reduce((a, l) => a + Math.max(0, l.pending), 0)
   const name = localStorage.getItem('kosh.name')
   const [adding, setAdding] = useState(false)
   return <Page title={`${greeting()}${name ? ', ' + name : ''}`} actions={<button className="primary" onClick={() => setAdding(true)}>+ Add transaction</button>}>
@@ -184,6 +210,10 @@ export function Home() {
           <div className="kv"><span>Credit cards owed</span><b>{money(ms.cards, { paise: false })}</b></div>
           <a href="#/accounts" className="small">Accounts →</a>
         </Card>
+        {openLoans.length > 0 && <Card title="Lent & borrowed" actions={<a href="#/loans">Loans →</a>}>
+          {owedToMe > 0 && <div className="kv"><span>Owed to you ({openLoans.filter(l => l.kind === 'LENT' && l.pending > 0).length})</span><b>{money(owedToMe, { paise: false })}</b></div>}
+          {iOwe > 0 && <div className="kv"><span>You owe ({openLoans.filter(l => l.kind === 'BORROWED' && l.pending > 0).length})</span><b>{money(iOwe, { paise: false })}</b></div>}
+        </Card>}
         {review > 0 && <Card title="Waiting for you"><p>{review} transaction(s) to check. <a href="#/review">Review →</a></p></Card>}
         {budgets.length > 0 && <Card title="Budgets this month">{budgets.map(b => <a key={b.uid} href="#/budgets" className="catrow plain" title={`${money(b.available - b.spent, { paise: false })} left`}><span>{b.name}</span><Bar pct={b.pct} warn={b.pct >= 100} /><b>{b.pct}%</b></a>)}</Card>}
       </div>
@@ -269,12 +299,17 @@ export function Accounts({ arg }: { arg?: string }) {
       <Card><TxnTable list={list} /></Card>
       {fix && <BalanceFixer a={fix} onClose={() => setFix(null)} />}</Page>
   }
-  const list = accounts(db)
+  const list = accounts(db); const cards = debitCards(db)
   return <Page title="Accounts" actions={<button className="primary" onClick={() => setEdit({ kind: 'BANK', openingBalancePaise: 0 })}>+ Add account</button>}>
     <p className="muted">Balances = opening balance + money in − money out from saved transactions. Transfers (ATM withdrawals, card bill payments) move money between accounts and are not spending or income.</p>
     <Card><table className="tbl"><thead><tr><th>Account</th><th>Type</th><th className="r">Balance / owed</th><th /></tr></thead>
       <tbody>{list.map(a => <tr key={a.uid}><td><a href={'#/accounts/' + a.uid}>{a.name}</a></td><td>{({ BANK: 'Bank', CARD: 'Credit card', CASH: 'Cash', WALLET: 'Wallet' } as any)[a.kind] ?? a.kind}</td>
         <td className="r">{a.kind === 'CARD' ? `${money(-balanceOf(a, f))} owed` : money(balanceOf(a, f))}</td><td className="r nowrap"><button onClick={() => setFix(a)}>Correct balance</button> <button className="link" onClick={() => setEdit(a)}>Edit</button></td></tr>)}</tbody></table></Card>
+    <Card title="Debit cards" actions={<button onClick={() => setEdit({ kind: 'WALLET', bank: 'debit:', openingBalancePaise: 0 })}>+ Add debit card</button>}>
+      {cards.length ? <table className="tbl"><tbody>{cards.map(c => { const l = debitCardLink(db, c); return <tr key={c.uid}><td>{c.name}</td>
+        <td>{l ? <>spends are charged to <b>{l.name}</b></> : <span className="err">not linked to a bank account</span>}</td><td className="r"><button className="link" onClick={() => setEdit(c)}>Edit</button></td></tr> })}</tbody></table>
+        : <Empty>No debit cards yet. A debit card holds no money of its own: pick it when adding a transaction and the amount comes out of the bank account you link it to.</Empty>}
+    </Card>
     {edit && <AccountEditor a={edit} onClose={() => setEdit(null)} />}
     {fix && <BalanceFixer a={fix} onClose={() => setFix(null)} />}
   </Page>
@@ -320,10 +355,26 @@ function BalanceFixer({ a, onClose }: { a: Account; onClose: () => void }) {
 
 function AccountEditor({ a, onClose }: { a: Partial<Account>; onClose: () => void }) {
   const db = useDb()
-  const [x, setX] = useState(a); const [ob, setOb] = useState(String((a.kind === 'CARD' ? -1 : 1) * (a.openingBalancePaise ?? 0) / 100))
+  const debit = isDebitCard(a as Account) || a.bank === 'debit:'
+  const [x, setX] = useState<Partial<Account>>({ ...a, kind: debit ? 'DEBIT' : a.kind }); const [ob, setOb] = useState(String((a.kind === 'CARD' ? -1 : 1) * (a.openingBalancePaise ?? 0) / 100))
+  const [link, setLink] = useState<string | null>(debit && a.bank !== 'debit:' ? a.bank!.slice('debit:'.length) : null)
+  const [last4, setLast4] = useState('')
+  if (x.kind === 'DEBIT') {
+    const bank = link ? db.get<Account>('accounts', link) : undefined
+    const name = (x.name ?? '').trim() || (bank ? `${bank.name.replace(/\s*••\d+$/, '')} debit card${last4 ? ' ••' + last4 : ''}` : '')
+    return <Modal title={a.uid ? 'Edit debit card' : 'Add debit card'} onClose={onClose}>
+      <Field label="Type"><select value="DEBIT" onChange={e => setX({ ...x, kind: e.target.value })}><option value="BANK">Bank account</option><option value="DEBIT">Debit card</option><option value="CARD">Credit card</option><option value="WALLET">Wallet</option><option value="CASH">Cash</option></select></Field>
+      <Field label="Linked bank account (payments come out of this account)"><AccountSelect kinds={['BANK']} empty="Choose a bank account" value={link} onChange={setLink} /></Field>
+      <Field label="Last 4 digits of the card (optional, only these are stored)"><input maxLength={4} value={last4} onChange={e => setLast4(e.target.value.replace(/\D/g, ''))} /></Field>
+      <Field label="Name (optional)"><input value={x.name ?? ''} onChange={e => setX({ ...x, name: e.target.value })} placeholder={name || 'HDFC debit card ••1234'} /></Field>
+      <p className="muted">A debit card holds no money of its own. When you pick it on a transaction, the amount is taken from the linked bank account.</p>
+      <footer>{a.uid && <button className="danger" onClick={() => { db.put('accounts', { archived: 1 }, a.uid); onClose() }}>Remove card</button>}<span className="grow" />
+        <button className="primary" disabled={!link || !name} onClick={() => { db.put('accounts', { name, kind: 'WALLET', bank: 'debit:' + link, last4: null, openingBalancePaise: 0, archived: 0 }, a.uid); onClose() }}>Save</button></footer>
+    </Modal>
+  }
   return <Modal title={a.uid ? 'Edit account' : 'Add account'} onClose={onClose}>
     <Field label="Name"><input value={x.name ?? ''} onChange={e => setX({ ...x, name: e.target.value })} placeholder="HDFC ••4821" /></Field>
-    <Field label="Type"><select value={x.kind} onChange={e => setX({ ...x, kind: e.target.value })}><option value="BANK">Bank account</option><option value="CARD">Credit card</option><option value="WALLET">Wallet</option><option value="CASH">Cash</option></select></Field>
+    <Field label="Type"><select value={x.kind} onChange={e => setX({ ...x, kind: e.target.value })}><option value="BANK">Bank account</option><option value="DEBIT">Debit card</option><option value="CARD">Credit card</option><option value="WALLET">Wallet</option><option value="CASH">Cash</option></select></Field>
     <Field label="Bank"><input value={x.bank ?? ''} onChange={e => setX({ ...x, bank: e.target.value || null })} /></Field>
     <Field label="Last 4 digits (only these are stored)"><input maxLength={4} value={x.last4 ?? ''} onChange={e => setX({ ...x, last4: e.target.value.replace(/\D/g, '') || null })} /></Field>
     <Field label={x.kind === 'CARD' ? 'Amount owed when you started using Kosh (₹)' : 'Opening balance when you started using Kosh (₹)'}><input value={ob} onChange={e => setOb(e.target.value)} /></Field>
@@ -737,4 +788,88 @@ export function Categories() {
         <button className="primary" disabled={!kw.keyword.trim() || !kw.categoryId} onClick={() => { db.put('keyword_rules', { keyword: kw.keyword.trim().toLowerCase(), categoryId: kw.categoryId, sortOrder: kw.uid ? db.get('keyword_rules', kw.uid)?.sortOrder : Math.max(0, ...keywords.map(k => k.sortOrder)) + 1 }, kw.uid ?? `kw:${kw.keyword.trim().toLowerCase()}`); setKw(null) }}>Save</button></footer>
     </Modal>}
   </Page>
+}
+
+
+// ====================================================================== Loans (lent & borrowed)
+const LOAN_TITLES: Record<string, string> = {
+  'LENT:principal': 'Lend more', 'LENT:repayment': 'Money received back', 'BORROWED:principal': 'Borrow more', 'BORROWED:repayment': 'Pay back',
+}
+export function Loans() {
+  const db = useDb(); const all = loanList(db)
+  const open = all.filter(l => !l.closed); const closed = all.filter(l => l.closed)
+  const lentPending = open.filter(l => l.kind === 'LENT').reduce((a, l) => a + Math.max(0, l.pending), 0)
+  const owePending = open.filter(l => l.kind === 'BORROWED').reduce((a, l) => a + Math.max(0, l.pending), 0)
+  const [modal, setModal] = useState<{ kind: LoanKind; loan?: Loan; step: LoanStep } | null>(null)
+  const [history, setHistory] = useState<string | null>(null)
+  const close = (l: Loan) => {
+    const msg = l.pending > 0 ? `${money(l.pending)} is still ${l.kind === 'LENT' ? 'unpaid by' : 'unpaid to'} ${l.person}. Close this loan anyway (treat it as settled / written off)?` : `Close the loan with ${l.person}?`
+    if (confirm(msg)) { closeLoan(db, l.uid); toast(`Loan with ${l.person} closed`) }
+  }
+  const card = (l: Loan) => {
+    const pct = l.principal > 0 ? Math.round(l.settled * 100 / l.principal) : 0
+    const lent = l.kind === 'LENT'
+    return <section key={l.uid} className="card loan">
+      <header><h3>{l.person} <small className="tag">{lent ? 'you lent' : 'you borrowed'}</small></h3><span className="muted">{l.startMillis ? fmtDay(l.startMillis) : ''}</span></header>
+      {l.note && <p className="muted">{l.note}</p>}
+      <div className="kv"><span>{lent ? 'Lent' : 'Borrowed'}</span><b>{money(l.principal, { paise: false })}</b></div>
+      <div className="kv"><span>{lent ? 'Received back' : 'Paid back'}</span><b>{money(l.settled, { paise: false })}</b></div>
+      <Bar pct={pct} ok />
+      <div className="kv"><span>{l.pending < 0 ? (lent ? 'Received extra' : 'Paid extra') : 'Still pending'}</span><b className={l.pending > 0 ? (lent ? '' : 'err') : ''}>{money(Math.abs(l.pending), { paise: false })}</b></div>
+      <div className="row">
+        <button className="primary" onClick={() => setModal({ kind: l.kind, loan: l, step: 'repayment' })}>{lent ? 'Money received' : 'I paid back'}</button>
+        <button onClick={() => setModal({ kind: l.kind, loan: l, step: 'principal' })}>{lent ? 'Lend more' : 'Borrow more'}</button>
+        <button className="link" onClick={() => setHistory(history === l.uid ? null : l.uid)}>{history === l.uid ? 'Hide history' : 'History'}</button>
+        <span className="grow" /><button onClick={() => close(l)}>Close loan</button>
+      </div>
+      {history === l.uid && <TxnTable list={[...l.entries].reverse()} />}
+    </section>
+  }
+  return <Page title="Loans" actions={<><button onClick={() => setModal({ kind: 'BORROWED', step: 'principal' })}>+ I borrowed</button><button className="primary" onClick={() => setModal({ kind: 'LENT', step: 'principal' })}>+ I lent</button></>}>
+    <div className="stats"><Stat label="Owed to you" value={money(lentPending, { paise: false })} tone="pos" /><Stat label="You owe" value={money(owePending, { paise: false })} tone={owePending ? 'neg' : ''} /><Stat label="Open loans" value={String(open.length)} /></div>
+    {!open.length ? <Empty>No open loans. Use “+ I lent” when you give money to someone — it comes out of the account you choose, is not counted as spending, and stays here until you close it yourself.</Empty>
+      : <div className="cards">{open.map(card)}</div>}
+    {closed.length > 0 && <Card title={`Closed loans (${closed.length})`}><table className="tbl"><tbody>{closed.map(l => <tr key={l.uid}><td>{l.person}</td><td>{l.kind === 'LENT' ? 'lent' : 'borrowed'} {money(l.principal, { paise: false })}</td>
+      <td>{l.pending !== 0 ? <span className="muted">{money(Math.abs(l.pending), { paise: false })} {l.pending > 0 ? 'written off' : 'extra'}</span> : <span className="muted">settled</span>}</td>
+      <td className="r"><button className="link" onClick={() => reopenLoan(db, l.uid)}>Reopen</button></td></tr>)}</tbody></table></Card>}
+    {modal && <LoanModal {...modal} onClose={() => setModal(null)} />}
+  </Page>
+}
+
+function LoanModal({ kind, loan, step, onClose }: { kind: LoanKind; loan?: Loan; step: LoanStep; onClose: () => void }) {
+  const db = useDb(); const lent = kind === 'LENT'
+  const intoLoan = lent === (step === 'principal') // money leaves one of my accounts
+  const [person, setPerson] = useState('')
+  const [amt, setAmt] = useState(loan && step === 'repayment' && loan.pending > 0 ? String(loan.pending / 100) : '')
+  const [date, setDate] = useState(istDate(Date.now())); const [method, setMethod] = useState('UPI'); const [note, setNote] = useState('')
+  const [acct, setAcct] = useState<string | null>(accounts(db).find(a => a.kind === 'BANK')?.uid ?? null)
+  const [err, setErr] = useState('')
+  const paise = parseRupees(amt) ?? 0
+  const title = loan ? `${LOAN_TITLES[kind + ':' + step]} · ${loan.person}` : lent ? 'Lend money' : 'Borrow money'
+  const save = () => {
+    if (!paise) return setErr('Enter an amount.')
+    if (!acct) return setErr(intoLoan ? 'Choose the account the money came from.' : 'Choose the account the money went into.')
+    const m = { amountPaise: paise, dateMillis: fromIstDate(date), accountId: acct, method, note: note || null }
+    try {
+      if (loan) loanMove(db, loan.uid, kind, loan.person, step, m)
+      else createLoan(db, kind, person, m)
+    } catch (e: any) { return setErr(e.message) }
+    if (loan && step === 'repayment' && paise >= loan.pending && loan.pending > 0) toast(`${loan.person} is fully settled — close the loan when you are ready`, 'ok')
+    else toast(`${money(paise, { paise: false })} recorded`)
+    onClose()
+  }
+  return <Modal title={title} onClose={onClose}>
+    {!loan && <Field label={lent ? 'Lent to (person)' : 'Borrowed from (person)'}><input autoFocus value={person} onChange={e => setPerson(e.target.value)} placeholder="Name" /></Field>}
+    <div className="grid2">
+      <Field label="Amount (₹)"><input inputMode="decimal" autoFocus={!!loan} value={amt} onChange={e => setAmt(e.target.value)} /></Field>
+      <Field label="Date"><input type="date" value={date} onChange={e => e.target.value && setDate(e.target.value)} /></Field>
+      <Field label="Method"><select value={method} onChange={e => { setMethod(e.target.value); if (e.target.value === 'CASH') { const c = cashAccount(db); if (c) setAcct(c.uid) } }}>{METHODS.map(m => <option key={m}>{m}</option>)}</select></Field>
+      <Field label={intoLoan ? 'Paid from account' : 'Received into account'}><AccountSelect cards value={acct} onChange={setAcct} /></Field>
+    </div>
+    <Field label="Note"><input value={note} onChange={e => setNote(e.target.value)} placeholder={loan ? '' : 'What it was for, when it is due…'} /></Field>
+    {loan && step === 'repayment' && paise > loan.pending && loan.pending > 0 && <p className="muted">That is {money(paise - loan.pending)} more than what is pending (for example interest). It will show as extra.</p>}
+    <p className="muted">Not counted as {intoLoan ? 'spending' : 'income'}. {intoLoan ? 'Your account balance goes down by this amount' : 'Your account balance goes up by this amount'}.</p>
+    {err && <p className="err">{err}</p>}
+    <footer><span className="grow" /><button className="primary" onClick={save}>Save</button></footer>
+  </Modal>
 }

@@ -186,6 +186,8 @@ Money is always **paise as Long/integer**. Dates are epoch millis; calendar logi
 | sync_flag | id=1 | suppress (1 while applying remote changes so triggers don't echo) |
 | view expense_lines | — | Expense lines: split parts, else the transaction itself (category stats use this) |
 
+**Loans and debit cards (web feature, stored in existing tables so the phone syncs them unchanged).** A loan is a `WALLET` account named `Lent · <person>` / `Borrowed · <person>` with `bank = 'Lent'|'Borrowed'`; lending, receiving back and paying back are `TRANSFER`s (category `transfers.people`) between the user's account and that loan account; "closing" a loan sets `archived = 1`. A debit card is a `WALLET` account with `bank = 'debit:<uid of the linked bank account>'` that never holds money — the web editor rewrites `accountId` to the linked bank account on save. The phone currently shows loans/cards as plain wallets (it counts loan balances in its wallet total) and has no UI for them; native phone screens would need a schema-free port of `web/src/loans.ts` plus `isLoanAcct` / `isDebitCard` filters in its account lists and totals.
+
 Migrations: V1→V2 (plans), V2→V3 (accounts/cash/splits/sync tables). `MigrationTest` checks 1→2→3 with real schema JSON. To change the schema: add entity changes, bump version, write `V3_TO_V4`, export schema 4.json, extend `MigrationTest`, **regenerate `web/src/schema.ts`** (see §7), and keep `SYNCED_TABLES` / web `TABLE_ORDER` / `REFS` in sync.
 
 ---

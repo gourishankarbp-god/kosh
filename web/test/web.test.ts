@@ -5,6 +5,9 @@ import { deriveKey, encrypt, decrypt, b64, encryptJson, CHECK_TEXT } from '../sr
 import { parseCsv, parseByBalance, clean } from '../src/statement'
 import { importRows } from '../src/importer'
 import { mask, validate } from '../src/ai'
+import { createLoan, loanMove, loanList, closeLoan, reopenLoan } from '../src/loans'
+import { TABLES } from '../src/schema'
+import { accounts, debitCards, resolveSpendAccount, monthTotals, txns, TYPES } from '../src/logic'
 import { money, compact, moneySummary, budgetStatus, budgetImpact, thisMonth, nextDue, fyLabel, fyStart } from '../src/logic'
 
 async function space(store: MemoryStore, pass: string) {
@@ -120,5 +123,60 @@ describe('AI safety', () => {
     const msgs = [{ uid: 'r1', body: 'charged INR 1,180.00 on 03-11-25', receivedAt: 1 }]
     const ok = validate({ rows: () => [] } as any, msgs, [{ i: 0, isTransaction: true, type: 'EXPENSE', amount: 1180 }, { i: 0, isTransaction: true, type: 'EXPENSE', amount: 9999 }])
     expect(ok).toHaveLength(1); expect(ok[0].confidence).toBeLessThan(80)
+  })
+})
+
+describe('loans and debit cards (phone-safe)', () => {
+  const HDFC = 'acct:hdfc:4821:bank'
+  async function open() { const store = new MemoryStore(); await space(store, 'pw pw pw pw'); const w = await LocalDb.open(new MemoryPersist()); await w.connect(store, 'pw pw pw pw'); return w }
+  const move = (accountId: string, amountPaise: number, note: string | null = null) => ({ amountPaise, dateMillis: Date.now(), accountId, method: 'UPI', note })
+
+  it('lent money leaves the account, is not spending, and stays open until closed by hand', async () => {
+    const w = await open(); const spent0 = monthTotals(w, thisMonth()).expense
+    const uid = createLoan(w, 'LENT', 'Ravi', move(HDFC, 2000000, 'wedding'))
+    expect(moneySummary(w).bank).toBe(1000000 - 25000 - 2000000)          // lent amount debited from the account
+    expect(monthTotals(w, thisMonth()).expense).toBe(spent0)               // not counted as spending
+    expect(accounts(w).some(a => a.uid === uid)).toBe(false)               // the loan book is not a real account
+    expect(loanList(w)[0]).toMatchObject({ person: 'Ravi', kind: 'LENT', principal: 2000000, settled: 0, pending: 2000000, note: 'wedding', closed: false })
+    loanMove(w, uid, 'LENT', 'Ravi', 'repayment', move(HDFC, 500000))      // part paid back
+    expect(loanList(w)[0]).toMatchObject({ pending: 1500000, settled: 500000, closed: false })
+    expect(moneySummary(w).bank).toBe(1000000 - 25000 - 1500000)
+    closeLoan(w, uid)                                                      // closed manually, even though 15,000 is unpaid
+    expect(loanList(w)[0]).toMatchObject({ closed: true, pending: 1500000 })
+    reopenLoan(w, uid); expect(loanList(w)[0].closed).toBe(false)
+  })
+
+  it('borrowed money comes in, is not income, and paying back reduces what is owed', async () => {
+    const w = await open()
+    const uid = createLoan(w, 'BORROWED', 'Asha', move('acct:cash', 300000))
+    expect(moneySummary(w).cash).toBe(50000 + 300000)
+    expect(monthTotals(w, thisMonth()).income).toBe(0)
+    loanMove(w, uid, 'BORROWED', 'Asha', 'repayment', move(HDFC, 100000))
+    expect(loanList(w)[0]).toMatchObject({ kind: 'BORROWED', principal: 300000, settled: 100000, pending: 200000 })
+  })
+
+  it('a debit card spends from its linked bank account', async () => {
+    const w = await open()
+    const card = w.put('accounts', { name: 'HDFC debit ••1234', kind: 'WALLET', bank: 'debit:' + HDFC, last4: null, openingBalancePaise: 0, archived: 0 })
+    expect(debitCards(w).map(a => a.uid)).toEqual([card]); expect(accounts(w).some(a => a.uid === card)).toBe(false)
+    expect(resolveSpendAccount(w, card)).toMatchObject({ accountId: HDFC, accountLast4: '4821' })
+    expect(resolveSpendAccount(w, HDFC)).toMatchObject({ accountId: HDFC })
+    createLoan(w, 'LENT', 'Ravi', move(card, 100000))                      // lending through the card also comes out of the bank
+    expect(moneySummary(w).bank).toBe(1000000 - 25000 - 100000)
+    w.put('accounts', { archived: 1 }, HDFC)
+    expect(resolveSpendAccount(w, card)).toMatchObject({ accountId: null, linkMissing: true })
+  })
+
+  it('writes only columns, account kinds and transaction types the current phone app already knows', async () => {
+    const w = await open()
+    const uid = createLoan(w, 'LENT', 'Ravi', move(HDFC, 100000)); loanMove(w, uid, 'LENT', 'Ravi', 'repayment', move(HDFC, 50000))
+    w.put('accounts', { name: 'HDFC debit', kind: 'WALLET', bank: 'debit:' + HDFC, last4: null, openingBalancePaise: 0, archived: 0 })
+    for (const t of ['accounts', 'transactions', 'audit_log']) for (const r of w.rows(t)) {
+      const known = new Set(TABLES[t].cols.map(c => c.name))
+      expect(Object.keys(r).filter(k => k !== 'uid' && !known.has(k))).toEqual([])
+    }
+    expect(txns(w).every(t => TYPES.includes(t.type))).toBe(true)
+    expect(w.rows('accounts').every(a => ['BANK', 'CARD', 'WALLET', 'CASH'].includes(a.kind))).toBe(true)
+    expect(txns(w).filter(t => t.accountId === uid || t.toAccountId === uid).every(t => t.categoryId === 'transfers.people' && t.type === 'TRANSFER')).toBe(true)
   })
 })

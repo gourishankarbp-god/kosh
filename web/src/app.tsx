@@ -15,14 +15,14 @@ export function useDb() { const { db } = useApp(); useSyncExternalStore(f => db.
 const ROUTES: [string, string, (p: { arg?: string }) => JSX.Element][] = [
   ['home', 'Home', P.Home], ['txns', 'Transactions', P.Transactions], ['review', 'Review', P.Review], ['accounts', 'Accounts', P.Accounts],
   ['cash', 'Cash', P.Cash], ['budgets', 'Budgets', P.Budgets], ['recurring', 'Recurring & due', P.Recurring], ['goals', 'Goals', P.Goals],
-  ['policies', 'LIC & deposits', P.Policies], ['reports', 'Reports', P.Reports], ['import', 'Import', P.Import],
+  ['policies', 'LIC & deposits', P.Policies], ['loans', 'Loans', P.Loans], ['reports', 'Reports', P.Reports], ['import', 'Import', P.Import],
   ['assistant', 'AI assistant', P.Assistant], ['categories', 'Categories & rules', P.Categories], ['archive', 'Archive', P.Archive], ['settings', 'Settings & sync', P.Settings],
 ]
 /** The sidebar shows these five sections; the pages inside each appear as tabs at the top of the page. Page addresses are unchanged. */
 const GROUPS: { id: string; label: string; routes: string[] }[] = [
   { id: 'home', label: 'Home', routes: ['home'] },
   { id: 'money', label: 'Money', routes: ['txns', 'review', 'accounts', 'cash'] },
-  { id: 'plan', label: 'Plan', routes: ['budgets', 'recurring', 'goals', 'policies'] },
+  { id: 'plan', label: 'Plan', routes: ['budgets', 'recurring', 'goals', 'policies', 'loans'] },
   { id: 'insights', label: 'Insights', routes: ['reports', 'assistant'] },
   { id: 'manage', label: 'Manage', routes: ['import', 'categories', 'archive', 'settings'] },
 ]
