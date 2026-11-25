@@ -25,7 +25,7 @@ export function loanList(db: LocalDb): Loan[] {
     const into = sum(t => t.toAccountId === a.uid); const out = sum(t => t.accountId === a.uid)
     const principal = kind === 'LENT' ? into : out; const settled = kind === 'LENT' ? out : into
     const bal = balanceOf(a, f)
-    return { uid: a.uid, kind, person: a.name.replace(/^(Lent|Borrowed) · /, ''), note: entries.find(t => t.note)?.note ?? null, principal, settled,
+    return { uid: a.uid, kind, person: a.name.replace(/^(Lent|Borrowed) · /, ''), note: entries.map(t => t.note).find(n => n && !/^(Lent to|Borrowed from|Received back from|Paid back to) /.test(n)) ?? null, principal, settled,
       pending: kind === 'LENT' ? bal : -bal, startMillis: entries[0]?.dateMillis ?? 0, closed: !!a.archived, entries }
   }).sort((a, b) => b.startMillis - a.startMillis)
 }

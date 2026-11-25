@@ -31,5 +31,13 @@ export function loadDemo(db: LocalDb) {
   changes.push({ t: 'investment_entries', u: 'e1', v, r: { investmentId: 'i1', kind: 'CONTRIBUTION', amountPaise: 2435000, dateMillis: now - 12 * day, transactionId: null, note: 'Annual premium' } })
   changes.push({ t: 'recurring_rules', u: 'r1', v, r: { name: 'Rent', type: 'EXPENSE', amountPaise: 4200000, categoryId: 'housing.rent', merchantKey: null, accountId: 'a1', frequency: 'MONTHLY', startDate: '2025-04-05', nextDueDate: '2026-12-05', lastPaidDate: null, remindDaysBefore: 3, active: 1 } })
   changes.push({ t: 'savings_goals', u: 'g1', v, r: { name: 'Emergency fund', kind: 'EMERGENCY', targetPaise: 60000000, targetDate: '2027-06-30', createdAt: now, archived: 0 } }, { t: 'goal_contributions', u: 'gc1', v, r: { goalId: 'g1', amountPaise: 21000000, dateMillis: now, note: null } })
+  // Sample loans: one lent (part paid back), one borrowed.
+  changes.push(
+    { t: 'accounts', u: 'loan1', v, r: { name: 'Lent · Ravi Kumar', kind: 'WALLET', bank: 'Lent', last4: null, openingBalancePaise: 0, archived: 0 } },
+    { t: 'accounts', u: 'loan2', v, r: { name: 'Borrowed · Asha Menon', kind: 'WALLET', bank: 'Borrowed', last4: null, openingBalancePaise: 0, archived: 0 } })
+  tx(20, 'TRANSFER', 20000, 'Ravi Kumar', 'transfers.people', 'a1', { toAccountId: 'loan1', note: 'For his sister\u2019s wedding \u2014 back by January' })
+  tx(6, 'TRANSFER', 5000, 'Ravi Kumar', 'transfers.people', 'loan1', { toAccountId: 'a1', note: 'Received back from Ravi Kumar' })
+  tx(14, 'TRANSFER', 10000, 'Asha Menon', 'transfers.people', 'loan2', { toAccountId: 'a1', note: 'Borrowed from Asha Menon' })
+  tx(2, 'TRANSFER', 4000, 'Asha Menon', 'transfers.people', 'a1', { toAccountId: 'loan2', note: 'Paid back to Asha Menon' })
   db.apply(changes)
 }

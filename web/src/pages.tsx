@@ -795,11 +795,32 @@ export function Categories() {
 const LOAN_TITLES: Record<string, string> = {
   'LENT:principal': 'Lend more', 'LENT:repayment': 'Money received back', 'BORROWED:principal': 'Borrow more', 'BORROWED:repayment': 'Pay back',
 }
+const AUTO_NOTE = /^(Lent to|Borrowed from|Received back from|Paid back to) /
+/** One loan's money movements as a short timeline (replaces the wide transactions table, which overflowed the card). */
+function LoanHistory({ loan }: { loan: Loan }) {
+  const db = useDb()
+  return <ol className="timeline">{[...loan.entries].reverse().map(e => {
+    const intoLoan = e.toAccountId === loan.uid
+    const principal = (loan.kind === 'LENT') === intoLoan                // lending out / borrowing in
+    const label = loan.kind === 'LENT' ? (principal ? 'Lent' : 'Received back') : (principal ? 'Borrowed' : 'Paid back')
+    const mine = intoLoan ? e.accountId : e.toAccountId
+    const comingToMe = !intoLoan                                          // money left the loan book, i.e. arrived in one of my accounts
+    return <li key={e.uid} onClick={() => go('txns')}>
+      <i className={'dot ' + (comingToMe ? 'in' : 'out')} />
+      <div className="tl-main"><b>{label}</b><span className="muted">{fmtDay(e.dateMillis)} · {comingToMe ? 'into' : 'from'} {accountLabel(db, mine)}{e.status !== 'POSTED' && ' · ' + statusLabel(e.status)}</span>
+        {e.note && !AUTO_NOTE.test(e.note) && <span className="muted tl-note">{e.note}</span>}</div>
+      <b className={'tl-amt ' + (comingToMe ? 'pos' : 'neg')}>{comingToMe ? '+' : '−'}{money(e.amountPaise, { paise: false })}</b></li>
+  })}</ol>
+}
+
 export function Loans() {
   const db = useDb(); const all = loanList(db)
+  const [show, setShow] = useState<'ALL' | LoanKind>('ALL')
   const open = all.filter(l => !l.closed); const closed = all.filter(l => l.closed)
-  const lentPending = open.filter(l => l.kind === 'LENT').reduce((a, l) => a + Math.max(0, l.pending), 0)
-  const owePending = open.filter(l => l.kind === 'BORROWED').reduce((a, l) => a + Math.max(0, l.pending), 0)
+  const lentOpen = open.filter(l => l.kind === 'LENT'); const borrowedOpen = open.filter(l => l.kind === 'BORROWED')
+  const lentPending = lentOpen.reduce((a, l) => a + Math.max(0, l.pending), 0)
+  const owePending = borrowedOpen.reduce((a, l) => a + Math.max(0, l.pending), 0)
+  const shown = open.filter(l => show === 'ALL' || l.kind === show)
   const [modal, setModal] = useState<{ kind: LoanKind; loan?: Loan; step: LoanStep } | null>(null)
   const [history, setHistory] = useState<string | null>(null)
   const close = (l: Loan) => {
@@ -807,31 +828,46 @@ export function Loans() {
     if (confirm(msg)) { closeLoan(db, l.uid); toast(`Loan with ${l.person} closed`) }
   }
   const card = (l: Loan) => {
-    const pct = l.principal > 0 ? Math.round(l.settled * 100 / l.principal) : 0
-    const lent = l.kind === 'LENT'
-    return <section key={l.uid} className="card loan">
-      <header><h3>{l.person} <small className="tag">{lent ? 'you lent' : 'you borrowed'}</small></h3><span className="muted">{l.startMillis ? fmtDay(l.startMillis) : ''}</span></header>
-      {l.note && <p className="muted">{l.note}</p>}
-      <div className="kv"><span>{lent ? 'Lent' : 'Borrowed'}</span><b>{money(l.principal, { paise: false })}</b></div>
-      <div className="kv"><span>{lent ? 'Received back' : 'Paid back'}</span><b>{money(l.settled, { paise: false })}</b></div>
-      <Bar pct={pct} ok />
-      <div className="kv"><span>{l.pending < 0 ? (lent ? 'Received extra' : 'Paid extra') : 'Still pending'}</span><b className={l.pending > 0 ? (lent ? '' : 'err') : ''}>{money(Math.abs(l.pending), { paise: false })}</b></div>
-      <div className="row">
+    const pct = l.principal > 0 ? Math.min(100, Math.round(l.settled * 100 / l.principal)) : 0
+    const lent = l.kind === 'LENT'; const settled = l.pending <= 0
+    const note = l.note && !AUTO_NOTE.test(l.note) ? l.note : null
+    return <section key={l.uid} className={'card loan ' + (lent ? 'is-lent' : 'is-borrowed')}>
+      <div className="loan-top">
+        <div className="avatar" aria-hidden>{(l.person.trim()[0] ?? '?').toUpperCase()}</div>
+        <div className="loan-who"><h3>{l.person}</h3><span className="muted">{lent ? 'You lent' : 'You borrowed'}{l.startMillis ? ' · ' + fmtDay(l.startMillis) : ''}</span></div>
+        <span className={'status ' + (settled ? 'done' : lent ? 'owes' : 'owe')}>{settled ? 'Settled' : lent ? 'Owes you' : 'You owe'}</span>
+      </div>
+      {note && <p className="loan-note">{note}</p>}
+      <div className="loan-nums">
+        <div><span>{lent ? 'Lent' : 'Borrowed'}</span><b>{money(l.principal, { paise: false })}</b></div>
+        <div><span>{lent ? 'Received' : 'Paid back'}</span><b>{money(l.settled, { paise: false })}</b></div>
+        <div className="pending"><span>{l.pending < 0 ? 'Extra' : 'Pending'}</span><b>{money(Math.abs(l.pending), { paise: false })}</b></div>
+      </div>
+      <div className="loan-progress"><Bar pct={pct} ok /><small className="muted">{pct}% {lent ? 'received back' : 'paid back'}</small></div>
+      <div className="loan-actions">
         <button className="primary" onClick={() => setModal({ kind: l.kind, loan: l, step: 'repayment' })}>{lent ? 'Money received' : 'I paid back'}</button>
         <button onClick={() => setModal({ kind: l.kind, loan: l, step: 'principal' })}>{lent ? 'Lend more' : 'Borrow more'}</button>
-        <button className="link" onClick={() => setHistory(history === l.uid ? null : l.uid)}>{history === l.uid ? 'Hide history' : 'History'}</button>
-        <span className="grow" /><button onClick={() => close(l)}>Close loan</button>
+        <span className="grow" />
+        <button className="link" onClick={() => setHistory(history === l.uid ? null : l.uid)}>{history === l.uid ? 'Hide history' : `History (${l.entries.length})`}</button>
+        <button className="link muted-link" onClick={() => close(l)}>Close loan</button>
       </div>
-      {history === l.uid && <TxnTable list={[...l.entries].reverse()} />}
+      {history === l.uid && <LoanHistory loan={l} />}
     </section>
   }
   return <Page title="Loans" actions={<><button onClick={() => setModal({ kind: 'BORROWED', step: 'principal' })}>+ I borrowed</button><button className="primary" onClick={() => setModal({ kind: 'LENT', step: 'principal' })}>+ I lent</button></>}>
-    <div className="stats"><Stat label="Owed to you" value={money(lentPending, { paise: false })} tone="pos" /><Stat label="You owe" value={money(owePending, { paise: false })} tone={owePending ? 'neg' : ''} /><Stat label="Open loans" value={String(open.length)} /></div>
-    {!open.length ? <Empty>No open loans. Use “+ I lent” when you give money to someone — it comes out of the account you choose, is not counted as spending, and stays here until you close it yourself.</Empty>
-      : <div className="cards">{open.map(card)}</div>}
-    {closed.length > 0 && <Card title={`Closed loans (${closed.length})`}><table className="tbl"><tbody>{closed.map(l => <tr key={l.uid}><td>{l.person}</td><td>{l.kind === 'LENT' ? 'lent' : 'borrowed'} {money(l.principal, { paise: false })}</td>
-      <td>{l.pending !== 0 ? <span className="muted">{money(Math.abs(l.pending), { paise: false })} {l.pending > 0 ? 'written off' : 'extra'}</span> : <span className="muted">settled</span>}</td>
-      <td className="r"><button className="link" onClick={() => reopenLoan(db, l.uid)}>Reopen</button></td></tr>)}</tbody></table></Card>}
+    <div className="stats">
+      <div className="stat pos"><span>Owed to you</span><b>{money(lentPending, { paise: false })}</b><small className="muted">{lentOpen.length} open</small></div>
+      <div className={'stat ' + (owePending ? 'neg' : '')}><span>You owe</span><b>{money(owePending, { paise: false })}</b><small className="muted">{borrowedOpen.length} open</small></div>
+      <div className="stat"><span>Net position</span><b>{money(lentPending - owePending, { paise: false })}</b><small className="muted">{lentPending >= owePending ? 'more is owed to you' : 'you owe more than you are owed'}</small></div>
+    </div>
+    {open.length > 0 && <div className="tabs">{([['ALL', `All (${open.length})`], ['LENT', `Lent (${lentOpen.length})`], ['BORROWED', `Borrowed (${borrowedOpen.length})`]] as const).map(([k, label]) =>
+      <button key={k} className={show === k ? 'on' : ''} onClick={() => setShow(k)}>{label}</button>)}</div>}
+    {!open.length ? <div className="card loan-empty"><h3>No open loans</h3><p className="muted">Use “+ I lent” when you give money to someone. It comes out of the account you choose, is not counted as spending, and stays here until you close it yourself.</p></div>
+      : !shown.length ? <Empty>Nothing here.</Empty> : <div className="loans-grid">{shown.map(card)}</div>}
+    {closed.length > 0 && <Card title={`Closed loans (${closed.length})`}><div className="closed-list">{closed.map(l => <div key={l.uid} className="closed-row">
+      <div className="avatar small" aria-hidden>{(l.person.trim()[0] ?? '?').toUpperCase()}</div>
+      <div className="grow"><b>{l.person}</b><div className="muted">{l.kind === 'LENT' ? 'Lent' : 'Borrowed'} {money(l.principal, { paise: false })} · {l.pending !== 0 ? `${money(Math.abs(l.pending), { paise: false })} ${l.pending > 0 ? 'written off' : 'extra'}` : 'fully settled'}</div></div>
+      <button className="link" onClick={() => reopenLoan(db, l.uid)}>Reopen</button></div>)}</div></Card>}
     {modal && <LoanModal {...modal} onClose={() => setModal(null)} />}
   </Page>
 }
