@@ -3,7 +3,7 @@ import { useApp, useDb, go } from './app'
 import type { LocalDb, Row } from './db'
 import { firstKeptMonth, istMonth } from './db'
 import {
-  accounts, accountLabel, addMonths, balanceOf, budgetStatus, byTopCategory, cashAccount, categories, categoryPath, compact, counted, csvEscape,
+  accounts, accountLabel, addMonths, balanceOf, budgetImpact, budgetStatus, byTopCategory, cashAccount, categories, categoryPath, compact, counted, csvEscape,
   downloadText, expenseLines, flows, fmtDay, fromIstDate, fyLabel, fyMonths, fyStart, greeting, inMonth, investmentHistory, istDate, METHODS, money,
   monthLabel, monthRange, monthTotals, moneySummary, nextDue, parseRupees, PLAN_KINDS, REVIEW_STATUSES, thisMonth, totals, txns, TYPES, FREQUENCIES,
   type Account, type Category, type Txn,
@@ -11,6 +11,7 @@ import {
 import { readStatement, type StmtRow } from './statement'
 import { importRows, readScreenshot } from './importer'
 import * as AI from './ai'
+import { toast } from './toast'
 
 // ====================================================================== building blocks
 export const Card = ({ title, children, actions }: { title?: ReactNode; children: ReactNode; actions?: ReactNode }) => (
@@ -25,7 +26,19 @@ function Modal({ title, onClose, children, wide }: { title: string; onClose: () 
   return <div className="modal-bg" onMouseDown={e => e.target === e.currentTarget && onClose()}><div className={'modal' + (wide ? ' wide' : '')}><header><h3>{title}</h3><button className="link" onClick={onClose}>✕</button></header>{children}</div></div>
 }
 const Field = ({ label, children }: { label: string; children: ReactNode }) => <label className="field"><span>{label}</span>{children}</label>
-const Bar = ({ pct, warn }: { pct: number; warn?: boolean }) => <div className="bar"><i style={{ width: Math.min(100, pct) + '%' }} className={warn ? 'warn' : ''} /></div>
+const Bar = ({ pct, warn }: { pct: number; warn?: boolean }) => <div className="bar"><i style={{ width: Math.min(100, pct) + '%' }} className={warn || pct >= 100 ? 'warn' : pct >= 80 ? 'amber' : ''} /></div>
+
+/** Shown while adding/editing an expense: how it moves the matching budget(s). */
+function BudgetImpact({ lines, dateMillis, exclude, counts }: { lines: { categoryId: string; amountPaise: number }[]; dateMillis: number; exclude?: string; counts: boolean }) {
+  const db = useDb()
+  const rows = budgetImpact(db, lines.filter(l => l.amountPaise > 0), istMonth(dateMillis), exclude)
+  if (!rows.length) return null
+  return <div className="impact">{rows.map(r => <div key={r.uid} className="impact-row">
+    <div className="kv"><b>{r.name} budget</b><span>{money(r.before, { paise: false })} → <b className={r.pctAfter >= 100 ? 'err' : ''}>{money(r.after, { paise: false })}</b> of {money(r.available, { paise: false })}</span></div>
+    <Bar pct={r.pctAfter} />
+    <small className={r.pctAfter >= 100 ? 'err' : 'muted'}>{r.pctAfter >= 100 ? `Over by ${money(-r.left)}` : `${money(r.left)} left after this`}{!counts && ' · counts once you approve it'}</small>
+  </div>)}</div>
+}
 const Empty = ({ children }: { children: ReactNode }) => <p className="empty">{children}</p>
 
 function MonthSwitch({ ym, set }: { ym: string; set: (s: string) => void }) {
@@ -88,6 +101,15 @@ export function TxnEditor({ uid, initial, onClose }: { uid?: string; initial?: P
     const direction = t.type === 'INCOME' || t.type === 'REFUND' ? 'CREDIT' : t.type === 'TRANSFER' ? (t.direction ?? 'DEBIT') : 'DEBIT'
     const row = { ...t, amountPaise, direction, status: status ?? t.status ?? 'POSTED', updatedAt: now, createdAt: t.createdAt ?? now, sources: t.sources ?? 'MANUAL', confidence: t.confidence ?? 100 }
     const id = db.put('transactions', row, uid)
+    const mainLines = splits.length ? splits.map(s => ({ categoryId: s.categoryId ?? 'other', amountPaise: parseRupees(s.amt) ?? 0 })) : [{ categoryId: row.categoryId ?? 'other', amountPaise }]
+    if (row.type === 'EXPENSE' && row.status === 'POSTED') {
+      // The expense is now saved, so this is the budget position after it (it is already counted).
+      const cats = categories(db)
+      budgetStatus(db, istMonth(row.dateMillis!)).filter(b => mainLines.some(l => l.categoryId === b.categoryId || cats.get(l.categoryId)?.parentId === b.categoryId)).forEach(b => {
+        if (b.pct >= 100) toast(`${b.name}: over budget by ${money(b.spent - b.available, { paise: false })}`, 'bad')
+        else toast(`${b.name}: ${money(b.available - b.spent, { paise: false })} left (${b.pct}% used)`, b.pct >= 80 ? 'warn' : 'ok')
+      })
+    }
     db.put('audit_log', { transactionId: id, at: now, action: uid ? (status && status !== orig?.status ? 'STATUS_' + status : 'EDITED') : 'CREATED', before: orig ? JSON.stringify(orig) : null, after: JSON.stringify(row) })
     existingSplits.filter(s => !splits.some(x => x.uid === s.uid)).forEach(s => db.remove('transaction_splits', s.uid))
     splits.forEach(s => db.put('transaction_splits', { transactionId: id, categoryId: s.categoryId ?? 'other', amountPaise: parseRupees(s.amt) ?? 0, note: null }, s.uid))
@@ -106,7 +128,7 @@ export function TxnEditor({ uid, initial, onClose }: { uid?: string; initial?: P
       <Field label="Type"><select value={t.type} onChange={e => set({ type: e.target.value })}>{TYPES.map(x => <option key={x} value={x}>{typeLabel(x)}</option>)}</select></Field>
       <Field label="Amount (₹)"><input inputMode="decimal" value={amt} onChange={e => setAmt(e.target.value)} autoFocus={!uid} /></Field>
       <Field label="Date"><input type="date" value={istDate(t.dateMillis!)} onChange={e => e.target.value && set({ dateMillis: fromIstDate(e.target.value) })} /></Field>
-      <Field label="Method"><select value={t.method} onChange={e => set({ method: e.target.value })}>{METHODS.map(m => <option key={m}>{m}</option>)}</select></Field>
+      <Field label="Method"><select value={t.method} onChange={e => { const m = e.target.value; const cash = m === 'CASH' && t.type === 'EXPENSE' ? cashAccount(db) : undefined; set(cash ? { method: m, accountId: cash.uid, accountLast4: null } : { method: m }) }}>{METHODS.map(m => <option key={m}>{m}</option>)}</select></Field>
       <Field label={t.type === 'TRANSFER' ? 'From account' : 'Account'}><AccountSelect value={t.accountId ?? null} onChange={v => set({ accountId: v, accountLast4: v ? db.get<Account>('accounts', v)?.last4 ?? null : null })} /></Field>
       {t.type === 'TRANSFER' && <Field label="To account (cash, card, own account)"><AccountSelect value={t.toAccountId ?? null} onChange={v => set({ toAccountId: v })} /></Field>}
       <Field label="Merchant / payee"><input value={t.merchantName ?? ''} onChange={e => set({ merchantName: e.target.value || null })} /></Field>
@@ -114,6 +136,8 @@ export function TxnEditor({ uid, initial, onClose }: { uid?: string; initial?: P
       <Field label="Note"><input value={t.note ?? ''} onChange={e => set({ note: e.target.value || null })} /></Field>
       <Field label="Status"><select value={t.status} onChange={e => set({ status: e.target.value })}>{['POSTED', ...REVIEW_STATUSES, 'REJECTED'].map(s => <option key={s} value={s}>{statusLabel(s)}</option>)}</select></Field>
     </div>
+    {t.type === 'EXPENSE' && amountPaise > 0 && <BudgetImpact exclude={uid} counts={(t.status ?? 'POSTED') === 'POSTED'} dateMillis={t.dateMillis!}
+      lines={splits.length ? splits.map(s => ({ categoryId: s.categoryId ?? 'other', amountPaise: parseRupees(s.amt) ?? 0 })) : [{ categoryId: t.categoryId ?? 'other', amountPaise }]} />}
     {t.merchantKey && t.categoryId !== orig?.categoryId && <label className="check"><input type="checkbox" checked={learn} onChange={e => setLearn(e.target.checked)} /> Always use this category for {t.merchantName}</label>}
     {t.type === 'EXPENSE' && <div className="splits">
       <b>Split across categories</b> <button className="link" onClick={() => setSplits([...splits, { categoryId: t.categoryId ?? null, amt: '' }])}>+ add part</button>
@@ -161,7 +185,7 @@ export function Home() {
           <a href="#/accounts" className="small">Accounts →</a>
         </Card>
         {review > 0 && <Card title="Waiting for you"><p>{review} transaction(s) to check. <a href="#/review">Review →</a></p></Card>}
-        {budgets.length > 0 && <Card title="Budgets this month">{budgets.map(b => <div key={b.uid} className="catrow"><span>{b.name}</span><Bar pct={b.pct} warn={b.pct >= 100} /><b>{b.pct}%</b></div>)}</Card>}
+        {budgets.length > 0 && <Card title="Budgets this month">{budgets.map(b => <a key={b.uid} href="#/budgets" className="catrow plain" title={`${money(b.available - b.spent, { paise: false })} left`}><span>{b.name}</span><Bar pct={b.pct} warn={b.pct >= 100} /><b>{b.pct}%</b></a>)}</Card>}
       </div>
     </div>
     <Card title="Recent" actions={<a href="#/txns">All transactions →</a>}><TxnTable list={recent} /></Card>
@@ -353,7 +377,7 @@ export function Budgets() {
   return <Page title="Budgets" actions={<button className="primary" onClick={() => open()}>+ Set a budget</button>}>
     <MonthSwitch ym={ym} set={setYm} />
     {!list.length ? <Empty>No budgets yet. Set a monthly limit for any category; a parent category includes its subcategories.</Empty> :
-      <Card>{list.map(b => <div key={b.uid} className="budget" onClick={() => open(b)}><div className="kv"><b>{b.name}</b><span>{money(b.spent, { paise: false })} of {money(b.available, { paise: false })}{b.available > b.monthlyLimitPaise && <small> (incl. carry-over)</small>}</span></div><Bar pct={b.pct} warn={b.pct >= 100} /><small className={b.pct >= 100 ? 'err' : 'muted'}>{b.pct >= 100 ? `Over by ${money(b.spent - b.available)}` : `${money(b.available - b.spent)} left`}</small></div>)}</Card>}
+      <Card>{list.map(b => <div key={b.uid} className="budget" onClick={() => open(b)}><div className="kv"><b>{b.name}</b><span>{money(b.spent, { paise: false })} of {money(b.available, { paise: false })}{b.available > b.monthlyLimitPaise && <small> (incl. carry-over)</small>}</span></div><Bar pct={b.pct} warn={b.pct >= 100} /><small className={b.pct >= 100 ? 'err' : 'muted'}>{b.pct >= 100 ? `Over by ${money(b.spent - b.available)}` : `${money(b.available - b.spent)} left`}{b.pending > 0 && ` · ${money(b.pending, { paise: false })} more waiting in Review`}</small></div>)}</Card>}
     {edit && <Modal title="Budget" onClose={() => setEdit(null)}>
       <Field label="Category"><CategorySelect value={cat} onChange={setCat} kinds={['EXPENSE']} allowEmpty={false} /></Field>
       <Field label="Monthly limit (₹)"><input inputMode="decimal" value={lim} onChange={e => setLim(e.target.value)} /></Field>

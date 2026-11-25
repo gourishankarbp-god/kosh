@@ -114,19 +114,37 @@ export function moneySummary(db: LocalDb) {
 export const accountLabel = (db: LocalDb, uid: string | null) => (uid && db.get<Account>('accounts', uid)?.name) || '—'
 
 // ---------------------------------------------------------------- budgets / recurring / plans
-export function budgetStatus(db: LocalDb, ym: string) {
+export type BudgetRow = Row & { name: string; available: number; spent: number; pct: number; pending: number }
+/** Budgets with spend so far. Only POSTED expenses count (cash entries and phone-captured SMS alike);
+ *  `pending` is spend waiting in Check/Review that will count once approved. `exclude` leaves one transaction out (used while editing it). */
+export function budgetStatus(db: LocalDb, ym: string, exclude?: string): BudgetRow[] {
   const cats = categories(db)
-  const lines = expenseLines(db, txns(db).filter(t => inMonth(t, ym)))
-  const prevLines = expenseLines(db, txns(db).filter(t => inMonth(t, addMonths(ym, -1))))
-  const spentIn = (ls: typeof lines, cat: string) => ls.filter(l => l.categoryId === cat || cats.get(l.categoryId)?.parentId === cat).reduce((s, l) => s + l.amountPaise, 0)
+  const all = txns(db).filter(t => t.uid !== exclude)
+  const lines = expenseLines(db, all.filter(t => inMonth(t, ym)))
+  const pendingLines = all.filter(t => t.type === 'EXPENSE' && REVIEW_STATUSES.includes(t.status) && inMonth(t, ym)).map(t => ({ categoryId: t.categoryId ?? 'other', amountPaise: t.amountPaise }))
+  const prevLines = expenseLines(db, all.filter(t => inMonth(t, addMonths(ym, -1))))
+  const spentIn = (ls: { categoryId: string; amountPaise: number }[], cat: string) => ls.filter(l => l.categoryId === cat || cats.get(l.categoryId)?.parentId === cat).reduce((s, l) => s + l.amountPaise, 0)
   return db.rows('budgets').filter(b => b.startMonth <= ym).map(b => {
     const prevApplied = b.startMonth <= addMonths(ym, -1)
     const carry = b.rollover && prevApplied ? Math.max(0, b.monthlyLimitPaise - spentIn(prevLines, b.categoryId)) : 0
     const available = b.monthlyLimitPaise + carry
     const spent = spentIn(lines, b.categoryId)
-    return { ...b, name: categoryPath(b.categoryId, cats), available, spent, pct: available > 0 ? Math.round(spent * 100 / available) : 0 } as Row & { name: string; available: number; spent: number; pct: number }
+    return { ...b, name: categoryPath(b.categoryId, cats), available, spent, pending: spentIn(pendingLines, b.categoryId), pct: available > 0 ? Math.round(spent * 100 / available) : 0 } as BudgetRow
   }).sort((a, b) => b.pct - a.pct)
 }
+
+/** What adding `lines` would do to every budget that covers them (the category itself or its parent), for the month of the transaction. */
+export function budgetImpact(db: LocalDb, lines: { categoryId: string; amountPaise: number }[], ym: string, exclude?: string) {
+  const cats = categories(db)
+  return budgetStatus(db, ym, exclude).flatMap(b => {
+    const add = lines.filter(l => l.categoryId === b.categoryId || cats.get(l.categoryId)?.parentId === b.categoryId).reduce((s, l) => s + l.amountPaise, 0)
+    if (!add) return []
+    const after = b.spent + add
+    return [{ uid: b.uid as string, name: b.name, available: b.available, before: b.spent, after, add, pctAfter: b.available > 0 ? Math.round(after * 100 / b.available) : 0, left: b.available - after }]
+  })
+}
+/** Percent used per budget this month, to notice when a synced SMS expense pushes one over a threshold. */
+export const budgetPcts = (db: LocalDb) => new Map(budgetStatus(db, thisMonth()).map(b => [b.uid as string, { pct: b.pct, name: b.name }]))
 
 const FREQ_MONTHS: Record<string, number> = { MONTHLY: 1, QUARTERLY: 3, HALF_YEARLY: 6, YEARLY: 12, ONE_TIME: 0 }
 export const FREQUENCIES = Object.keys(FREQ_MONTHS)

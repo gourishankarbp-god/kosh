@@ -5,7 +5,7 @@ import { deriveKey, encrypt, decrypt, b64, encryptJson, CHECK_TEXT } from '../sr
 import { parseCsv, parseByBalance, clean } from '../src/statement'
 import { importRows } from '../src/importer'
 import { mask, validate } from '../src/ai'
-import { money, compact, moneySummary, budgetStatus, thisMonth, nextDue, fyLabel, fyStart } from '../src/logic'
+import { money, compact, moneySummary, budgetStatus, budgetImpact, thisMonth, nextDue, fyLabel, fyStart } from '../src/logic'
 
 async function space(store: MemoryStore, pass: string) {
   // What the phone writes when sync is first turned on.
@@ -96,6 +96,19 @@ describe('money & plans', () => {
     expect(moneySummary(w)).toMatchObject({ bank: 1000000 - 25000 - 200000, cash: 50000 + 200000 })
     w.put('budgets', { categoryId: 'food', monthlyLimitPaise: 100000, rollover: 0, startMonth: thisMonth() })
     expect(budgetStatus(w, thisMonth())[0]).toMatchObject({ spent: 25000, pct: 25 })
+  })
+  it('debits the food budget live from cash and SMS expenses, and previews the impact', async () => {
+    const store = new MemoryStore(); await space(store, 'pw pw pw pw')
+    const w = await LocalDb.open(new MemoryPersist()); await w.connect(store, 'pw pw pw pw')
+    w.put('budgets', { categoryId: 'food', monthlyLimitPaise: 1000000, rollover: 0, startMonth: thisMonth() })
+    const cash = w.put('transactions', { type: 'EXPENSE', direction: 'DEBIT', status: 'POSTED', amountPaise: 300000, dateMillis: Date.now(), accountId: 'acct:cash', categoryId: 'food', method: 'CASH', sources: 'MANUAL' })
+    expect(budgetStatus(w, thisMonth())[0]).toMatchObject({ spent: 325000, pct: 33 })
+    // waiting in Review: not counted yet, shown as pending
+    w.put('transactions', { type: 'EXPENSE', direction: 'DEBIT', status: 'NEEDS_REVIEW', amountPaise: 40000, dateMillis: Date.now(), accountId: 'acct:hdfc:4821:bank', categoryId: 'food', method: 'UPI', sources: 'SMS' })
+    expect(budgetStatus(w, thisMonth())[0]).toMatchObject({ spent: 325000, pending: 40000 })
+    // editing the cash entry must not count it twice
+    expect(budgetImpact(w, [{ categoryId: 'food', amountPaise: 500000 }], thisMonth(), cash)[0]).toMatchObject({ before: 25000, after: 525000, pctAfter: 53 })
+    expect(budgetImpact(w, [{ categoryId: 'other', amountPaise: 100 }], thisMonth())).toEqual([])
   })
   it('dates', () => { expect(nextDue('2026-01-31', 'MONTHLY', '2026-02-10')).toBe('2026-02-28'); expect(fyLabel(fyStart('2026-02'))).toBe('FY 2025-26') })
 })
