@@ -57,6 +57,8 @@ data class BackupData(
     val goalContributions: List<GoalContributionEntity> = emptyList(),
     val investments: List<InvestmentEntity> = emptyList(),
     val investmentEntries: List<InvestmentEntryEntity> = emptyList(),
+    // Added in 1.1; null in older backups (restoring one keeps the message formats already taught).
+    val taughtPatterns: List<com.prash.kosh.data.TaughtPatternEntity>? = null,
 ) {
     fun summary() = "${transactions.size} transactions, ${accounts.size} accounts, ${categories.size} categories, " +
         "${merchants.count { it.source == "USER" }} merchant rules, ${budgets.size} budgets, ${recurring.size} recurring payments, " +
@@ -123,7 +125,7 @@ class BackupManager(private val context: Context, private val db: AppDatabase) {
         transactions = db.transactions().all(), audit = db.audit().all(),
         budgets = db.budgets().all(), recurring = db.recurring().all(), goals = db.goals().all(),
         goalContributions = db.goals().allContributions(), investments = db.investments().all(),
-        investmentEntries = db.investments().allEntries(),
+        investmentEntries = db.investments().allEntries(), taughtPatterns = db.taught().all(),
     )
 
     /** Writes the encrypted backup to the chosen Drive/OneDrive file and keeps 7 local copies. */
@@ -167,6 +169,11 @@ class BackupManager(private val context: Context, private val db: AppDatabase) {
             db.budgets().insertAll(data.budgets); db.recurring().insertAll(data.recurring)
             db.goals().insertAll(data.goals); db.goals().insertAllContributions(data.goalContributions)
             db.investments().insertAll(data.investments); db.investments().insertAllEntries(data.investmentEntries)
+            data.taughtPatterns?.let { db.taught().clear(); db.taught().insertAll(it) }
+            // Backups made before 1.1 have no Reimbursement category.
+            if (db.categories().get(com.prash.kosh.engine.Taught.REIMBURSEMENT_CATEGORY) == null && db.categories().get("income") != null) {
+                db.categories().upsert(CategoryEntity(com.prash.kosh.engine.Taught.REIMBURSEMENT_CATEGORY, "Reimbursement", "income", "INCOME", "payments", 960))
+            }
         }
         KoshApp.get(context).repo.invalidateRules()
     }

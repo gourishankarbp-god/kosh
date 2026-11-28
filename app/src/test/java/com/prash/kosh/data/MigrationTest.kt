@@ -32,9 +32,10 @@ class MigrationTest {
         // Room validates the upgraded schema against the v2 entities here.
         helper.runMigrationsAndValidate("mig.db", 2, true, Migrations.V1_TO_V2).close()
         helper.runMigrationsAndValidate("mig.db", 3, true, Migrations.V2_TO_V3).close()
+        helper.runMigrationsAndValidate("mig.db", 4, true, Migrations.V3_TO_V4).close()
 
         val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
-        val db = Room.databaseBuilder(ctx, AppDatabase::class.java, "mig.db").addMigrations(Migrations.V1_TO_V2, Migrations.V2_TO_V3).addCallback(Migrations.TRIGGERS_CALLBACK).allowMainThreadQueries().build()
+        val db = Room.databaseBuilder(ctx, AppDatabase::class.java, "mig.db").addMigrations(Migrations.V1_TO_V2, Migrations.V2_TO_V3, Migrations.V3_TO_V4).addCallback(Migrations.TRIGGERS_CALLBACK).allowMainThreadQueries().build()
         runBlocking {
             val t = db.transactions().all().single()
             assertEquals(2800000L, t.amountPaise)
@@ -45,6 +46,8 @@ class MigrationTest {
             assertTrue(db.budgets().all().isEmpty())
             assertTrue(db.investments().all().isEmpty())
             assertNull(t.toAccountId)
+            assertEquals("Reimbursement", db.categories().get("income.reimbursement")!!.name)
+            assertTrue(db.taught().all().isEmpty())
             // Change capture works after the upgrade.
             db.transactions().update(t.copy(note = "rent"))
             assertTrue(db.sync().outboxCount() >= 1)

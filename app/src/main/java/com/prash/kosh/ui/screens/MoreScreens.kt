@@ -95,6 +95,7 @@ fun MoreScreen(onOpen: (String) -> Unit) {
         "categories" to ("Categories" to "Rename, add subcategories, hide"),
         "merchants" to ("Merchant rules" to "Which merchant goes in which category"),
         "keywords" to ("Keyword rules" to "Fallback words used when the merchant is unknown"),
+        "taught" to ("Taught messages" to "Teach Kosh new message types such as salary or OPD reimbursement"),
         "ignored" to ("Ignored messages" to "OTPs, promotions and other skipped messages"),
         "backup" to ("Backup & restore" to "Encrypted copy to Google Drive or OneDrive"),
         "security" to ("App lock" to "Fingerprint or PIN on open"),
@@ -356,12 +357,12 @@ fun KeywordRulesScreen(main: MainViewModel, onBack: () -> Unit) {
 /* ------------------------------------------------------------------ ignored messages */
 
 @Composable
-fun IgnoredScreen(main: MainViewModel, onBack: () -> Unit) {
+fun IgnoredScreen(main: MainViewModel, onBack: () -> Unit, onTeach: (Long) -> Unit = {}) {
     val items by main.repo.db.rawMessages().observeIgnored().collectAsState(initial = emptyList())
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item { ScreenHeader("Ignored messages", onBack) }
         item {
-            Text("Kept so you can check nothing real was skipped. If one is a real transaction, share it to Kosh from your messages app, or add it with +.",
+            Text("Kept so you can check nothing real was skipped. If one is a real transaction Kosh should read (salary, a reimbursement…), tap Teach Kosh on it and every message like it will be read from now on.",
                 fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (items.isEmpty()) item { EmptyState("Nothing ignored yet") }
@@ -370,6 +371,7 @@ fun IgnoredScreen(main: MainViewModel, onBack: () -> Unit) {
                 val reason = m.ignoreReason?.let { r -> runCatching { IgnoreReason.valueOf(r).label }.getOrDefault(r) } ?: ""
                 Text("$reason · ${m.sender} · ${formatDayTime(m.receivedAt)}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(if (m.ignoreReason == IgnoreReason.OTP.name) "(one-time password hidden)" else m.body, fontSize = 12.sp, maxLines = 6)
+                if (m.ignoreReason != IgnoreReason.OTP.name && m.body.isNotBlank()) TextButton(onClick = { onTeach(m.id) }) { Text("Teach Kosh") }
             }
         }
     }

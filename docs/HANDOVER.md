@@ -1,6 +1,6 @@
 # Kosh — project handover
 
-Everything a person or an AI agent needs to understand, build, run and continue Kosh — including from a different GitHub, Google or Claude account. Last updated 20 Nov 2026, at Android **1.0.2** (versionCode 8) and web build of the same commit.
+Everything a person or an AI agent needs to understand, build, run and continue Kosh — including from a different GitHub, Google or Claude account. Last updated 28 Nov 2026, at Android **1.1.0** (versionCode 9); web last changed 25 Nov 2026 (loans, debit cards).
 
 ---
 
@@ -46,6 +46,7 @@ Accounts: Union Bank, HDFC, Karnataka Bank. Credit cards: HSBC, HDFC, RBL. Real 
 | 1.0 | Google Drive sync, 12-month archive, Gemini agents, screenshot OCR, CSV import (phone), **web app**, GitHub Pages | Drive is the only sync provider; Gemini free tier with masked data; investments = LIC/insurance/bonds (+ future FD/RD), **SIP/PPF dropped**; GitHub user `gourishankarbp-god` |
 | 1.0.1 | Gemini 503 handling: retry once, then fall back through other free models | Model default `gemini-flash-latest` (alias survives renames) |
 | 1.0.2 | Correct balance / amount owed (web + phone); web Categories & rules page; privacy page for the OAuth consent screen | Adjustment is a `TRANSFER` in `transfers.adjust`, not income/expense |
+| 1.1.0 | **Teach Kosh a message** (phone): the owner teaches new SMS formats such as salary or OPD reimbursement from an ignored message, a transaction's source message or pasted text; new income category **Reimbursement** (`income.reimbursement`) | Phone only (owner's choice); taught matches **always go to Check** (never auto-saved), whatever the thresholds; OPD/medical reimbursements count as income, not as a refund against medical spend |
 
 ---
 
@@ -159,7 +160,7 @@ Push to `main` (changes under `web/`). The workflow runs the web tests, builds a
 
 ---
 
-## 5. Data model (Room v3; identical column names in sync files and the web app)
+## 5. Data model (Room v4; identical column names in sync files and the web app)
 
 Money is always **paise as Long/integer**. Dates are epoch millis; calendar logic uses **Asia/Kolkata**. Booleans are 0/1 integers.
 
@@ -184,11 +185,12 @@ Money is always **paise as Long/integer**. Dates are epoch millis; calendar logi
 | sync_meta | (tbl, uid) | uid ↔ localKey map, version, deleted |
 | sync_outbox | seq | tbl, localKey, op (U/D), at — filled by triggers |
 | sync_flag | id=1 | suppress (1 while applying remote changes so triggers don't echo) |
+| taught_patterns | id | **Phone only, not synced** (in encrypted backups). name (shown as payer), sender (DLT code e.g. `HDFCBK`, null = any), keywords (`|`-separated, all must appear as whole words), direction, type, categoryId, amountIndex (which Rs/INR/₹ amount), accountId (null = account in the message), sample, createdAt, matchCount, lastMatchedAt |
 | view expense_lines | — | Expense lines: split parts, else the transaction itself (category stats use this) |
 
 **Loans and debit cards (web feature, stored in existing tables so the phone syncs them unchanged).** A loan is a `WALLET` account named `Lent · <person>` / `Borrowed · <person>` with `bank = 'Lent'|'Borrowed'`; lending, receiving back and paying back are `TRANSFER`s (category `transfers.people`) between the user's account and that loan account; "closing" a loan sets `archived = 1`. A debit card is a `WALLET` account with `bank = 'debit:<uid of the linked bank account>'` that never holds money — the web editor rewrites `accountId` to the linked bank account on save. The phone currently shows loans/cards as plain wallets (it counts loan balances in its wallet total) and has no UI for them; native phone screens would need a schema-free port of `web/src/loans.ts` plus `isLoanAcct` / `isDebitCard` filters in its account lists and totals.
 
-Migrations: V1→V2 (plans), V2→V3 (accounts/cash/splits/sync tables). `MigrationTest` checks 1→2→3 with real schema JSON. To change the schema: add entity changes, bump version, write `V3_TO_V4`, export schema 4.json, extend `MigrationTest`, **regenerate `web/src/schema.ts`** (see §7), and keep `SYNCED_TABLES` / web `TABLE_ORDER` / `REFS` in sync.
+Migrations: V1→V2 (plans), V2→V3 (accounts/cash/splits/sync tables), V3→V4 (`taught_patterns`, `income.reimbursement` category). `MigrationTest` checks 1→2→3→4 with real schema JSON. V4 changed no synced table, so `web/src/schema.ts` was not regenerated (the new category reaches the web as a normal synced `categories` row). To change the schema: add entity changes, bump version, write `V4_TO_V5`, export schema 5.json, extend `MigrationTest`, **regenerate `web/src/schema.ts`** (see §7), and keep `SYNCED_TABLES` / web `TABLE_ORDER` / `REFS` in sync.
 
 ---
 
@@ -257,6 +259,8 @@ Web: push 20 s after last edit (only with a live token); pull every 10 min only 
 `RawInput(source, sender, body, receivedAt)` → `MessageFilter` (OTP, promo, failed, collect request, reminder → Ignored with reason) → `TransactionParser` (bank-specific templates for HDFC, ICICI, Union Bank, Karnataka Bank, HSBC, RBL, Kotak, SBI…, then generic parser; extracts amount, direction, last4, merchant, date, reference, method, bank) → `MerchantNormalizer` (alias dictionary: seed + user merchants) → categorise (user merchant rule > dictionary > keyword rules) → classify type (refund, transfer phrases, investment phrases, card-payment credit) → `ConfidenceScorer` (template 40 / generic 25, +20 amount, +10 explicit direction, +5 last4, +10 merchant, +category source score, +5 known sender; IMPORT counts as known sender) → `DuplicateDetector` (same reference+amount → merge; cross-channel SMS/notification/IMPORT within window and same account/merchant → merge; else suspected duplicate) → status by thresholds → insert + audit + raw message link → `afterCounted` (budget alerts, investment/recurring linking).
 Learning: when the user changes a merchant's category ("always"), a user merchant rule is saved and optionally applied to past rows.
 
+**Taught message formats (1.1, `engine/Taught.kt`, `ui/screens/TeachScreens.kt`).** Checked right after the OTP filter and before every other filter and template, so a taught format also rescues messages the rules skipped (promo-looking, no direction words). Match = same sender code (if set) + all ticked words as whole words; the most specific pattern wins. The amount is the `amountIndex`-th Rs/INR/₹ amount; last 4, date, reference and method come from the normal parser when it can read them. Result: confidence 90, category source USER_RULE, `forcedStatus = PENDING_VERIFICATION` (Check), merchant key `taught<id>`. `Repository.teach()` saves the pattern, re-reads all IGNORED raw messages that match (they become Check items), and if the message it was taught from already has a transaction, rewrites that transaction's type/category/payer/account (audit `RULE_APPLIED`, status unchanged). Entry points: More › Taught messages (list, forget, teach from pasted text — the pasted message is also ingested), Ignored messages › Teach Kosh, transaction › Source messages › Teach Kosh this message type.
+
 Statement import (phone CSV): `StatementParser.parseCsv` detects header columns (date, narration, debit/credit or amount + Dr/Cr), `toMessage()` builds `Rs.X debited from <bank> A/c XX<last4> on dd-MM-yy UPI. Info: <cleaned name> Ref <12-digit UPI ref>` and runs it through `ingest` with source IMPORT, so SMS already captured are merged.
 
 Web import uses `statement.ts` (+ SheetJS for Excel, pdf.js for PDF with table detection and a running-balance fallback) and `importer.ts` (hash-dedupe, merge with existing same amount/direction/account within 2 days and non-conflicting reference, classify via synced merchants/keyword rules + phrase rules, status by 95/80).
@@ -318,6 +322,7 @@ Everything needed is in this repo. Start with: build + tests (§4), read §5–�
 - Web screenshot OCR downloads Tesseract data (~10 MB) from jsDelivr on first use; Content-Security-Policy in `index.html` allows `cdn.jsdelivr.net` and `tessdata.projectnaptha.com`.
 - PDF statement parsing is heuristic; scanned PDFs need CSV/Excel instead.
 - Recurring payments on web: no reminders (phone sends notifications).
+- Taught message formats are phone-only and not synced: teaching on the web, or using taught formats in web statement imports, would need a synced table (schema + sync format change on both sides).
 - APK ~32 MB (ML Kit bundled model, R8 off). Enabling R8 needs keep rules for kotlinx-serialization and Room.
 - Old SIP/PPF investment rows from 0.2 are still displayed if present but cannot be created.
 
@@ -327,6 +332,7 @@ Everything needed is in this repo. Start with: build + tests (§4), read §5–�
 
 | Suite | Covers |
 | --- | --- |
+| `TaughtTest`, `TeachTest` | Taught formats: matching, sender/word rules, amount choice, OTP still ignored, always Check; re-reading skipped messages, updating the source transaction, forgetting |
 | `RecognitionEngineTest`, `RealSamplesTest`, `RealSamplesNov19Test` | Parsing templates and real bank SMS of the owner's banks; filters; categories; confidence |
 | `DuplicateDetectorTest` | Merge / suspected duplicate rules |
 | `MetricsTest` | FY, greeting, ratios, burn rate, due dates, budgets |

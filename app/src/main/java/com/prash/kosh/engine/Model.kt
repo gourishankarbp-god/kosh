@@ -56,12 +56,18 @@ data class Recognition(
     val confidence: Int,
     val knownSender: Boolean,
     val txnDateMillis: Long,
+    /** Set when a message format the owner taught matched ([Taught]). */
+    val taughtPatternId: Long? = null,
+    /** Account chosen when the format was taught; null = use the account in the message. */
+    val taughtAccountId: Long? = null,
+    /** Overrides the thresholds (taught formats always wait in Check). */
+    val forcedStatus: TxnStatus? = null,
 ) {
     /** Route by confidence alone (defaults 95 / 80); duplicate checks happen against the database. */
     val statusByConfidence: TxnStatus get() = statusFor(95, 80)
 
     /** At or above [autoSave]: saved. Between [review] and [autoSave]: Check queue. Below [review]: Review queue. */
-    fun statusFor(autoSave: Int, review: Int): TxnStatus = when {
+    fun statusFor(autoSave: Int, review: Int): TxnStatus = forcedStatus ?: when {
         confidence >= autoSave -> TxnStatus.POSTED
         confidence >= review -> TxnStatus.PENDING_VERIFICATION
         else -> TxnStatus.NEEDS_REVIEW

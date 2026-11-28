@@ -10,6 +10,8 @@ data class RuleSet(
     val keywordRules: List<Pair<String, String>> = SeedData.keywordRules,
     /** Category id -> kind, so a user rule pointing at an investment or transfer category sets the type. */
     val categoryKinds: Map<String, SeedData.Kind> = SeedData.categories.associate { it.id to it.kind },
+    /** Message formats the owner taught; checked before the built-in rules. */
+    val taught: List<TaughtPattern> = emptyList(),
 )
 
 /**
@@ -31,7 +33,11 @@ class RecognitionEngine(private val rules: RuleSet = RuleSet()) {
         if (input.source == CaptureSource.NOTIFICATION && input.sender !in TransactionParser.notificationApps) {
             return EngineResult.Ignored(IgnoreReason.UNTRUSTED_APP)
         }
-        MessageFilter.check(input)?.let { return EngineResult.Ignored(it) }
+        val filtered = MessageFilter.check(input)
+        // OTPs are never read, even if they happen to contain taught words.
+        if (filtered == IgnoreReason.OTP) return EngineResult.Ignored(filtered)
+        Taught.find(rules.taught, input)?.let { p -> Taught.recognise(p, input)?.let { return EngineResult.Recognised(it) } }
+        filtered?.let { return EngineResult.Ignored(it) }
         val f = TransactionParser.parse(input) ?: return EngineResult.Ignored(IgnoreReason.NO_AMOUNT)
 
         val merchant = f.merchantRaw?.let { normalizer.normalise(it) }

@@ -193,7 +193,7 @@ internal fun KoshNav(app: KoshApp) {
             composable("more") { MoreScreen { nav.navigate(it) } }
             composable("add") { EditTransactionScreen(main, null) { nav.popBackStack() } }
             composable("edit/{id}", arguments = listOf(navArgument("id") { type = NavType.LongType })) {
-                EditTransactionScreen(main, it.arguments?.getLong("id")) { nav.popBackStack() }
+                EditTransactionScreen(main, it.arguments?.getLong("id"), onTeach = { raw -> nav.navigate("teach/$raw") }) { nav.popBackStack() }
             }
             val back: () -> Unit = { nav.popBackStack() }
             composable("capture") { CaptureScreen(back) }
@@ -210,7 +210,11 @@ internal fun KoshNav(app: KoshApp) {
             composable("categories") { CategoriesScreen(main, back) }
             composable("merchants") { MerchantRulesScreen(main, back) }
             composable("keywords") { KeywordRulesScreen(main, back) }
-            composable("ignored") { IgnoredScreen(main, back) }
+            composable("ignored") { IgnoredScreen(main, back) { raw -> nav.navigate("teach/$raw") } }
+            composable("taught") { com.prash.kosh.ui.screens.TaughtListScreen(main, back) { nav.navigate("teach/0") } }
+            composable("teach/{raw}", arguments = listOf(navArgument("raw") { type = NavType.LongType })) {
+                com.prash.kosh.ui.screens.TeachScreen(main, it.arguments?.getLong("raw") ?: 0L, back)
+            }
             composable("backup") { BackupScreen(main, back) }
             composable("security") { SecurityScreen(back) }
             composable("appearance") { AppearanceScreen(back) }

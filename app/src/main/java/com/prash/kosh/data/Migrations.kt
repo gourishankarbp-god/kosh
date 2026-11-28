@@ -36,6 +36,16 @@ object Migrations {
         }
     }
 
+    /** 1.0.x -> 1.1: message formats taught by the owner (phone-only table) and the Reimbursement income category. */
+    val V3_TO_V4 = object : Migration(3, 4) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(V4_CREATE_TAUGHT)
+            db.execSQL("INSERT OR IGNORE INTO `categories` (`id`, `name`, `parentId`, `kind`, `icon`, `sortOrder`, `hidden`, `isFixed`) VALUES ('income.reimbursement', 'Reimbursement', 'income', 'INCOME', 'payments', 960, 0, 0)")
+        }
+    }
+
+    const val V4_CREATE_TAUGHT = "CREATE TABLE IF NOT EXISTS `taught_patterns` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `sender` TEXT, `keywords` TEXT NOT NULL, `direction` TEXT NOT NULL, `type` TEXT NOT NULL, `categoryId` TEXT NOT NULL, `amountIndex` INTEGER NOT NULL, `accountId` INTEGER, `sample` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `matchCount` INTEGER NOT NULL, `lastMatchedAt` INTEGER)"
+
     /** Tables whose changes are synced, with the column that identifies a row locally. */
     val SYNCED_TABLES = linkedMapOf(
         "accounts" to "id", "categories" to "id", "merchants" to "key", "keyword_rules" to "id",

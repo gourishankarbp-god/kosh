@@ -51,6 +51,30 @@ data class MerchantEntity(
     val aliases: String = "",  // '|' separated, used for matching
 )
 
+/**
+ * A message format the owner taught ("Teach Kosh this message"). Phone-only: not part of the
+ * Drive sync format (the web app does not read SMS). Included in encrypted backups.
+ */
+@Serializable
+@Entity(tableName = "taught_patterns")
+data class TaughtPatternEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val sender: String?,          // DLT header code, e.g. HDFCBK; null = any sender
+    val keywords: String,         // '|' separated, lower case
+    val direction: String,        // DEBIT / CREDIT
+    val type: String,             // TxnType
+    val categoryId: String,
+    val amountIndex: Int,
+    val accountId: Long?,
+    val sample: String,           // the message it was taught from (for the list screen)
+    val createdAt: Long,
+    val matchCount: Int = 0,
+    val lastMatchedAt: Long? = null,
+) {
+    fun keywordList(): List<String> = keywords.split('|').map { it.trim() }.filter { it.isNotEmpty() }
+}
+
 @Serializable
 @Entity(tableName = "keyword_rules")
 data class KeywordRuleEntity(

@@ -14,10 +14,10 @@ import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
         BudgetEntity::class, RecurringRuleEntity::class, GoalEntity::class, GoalContributionEntity::class,
         InvestmentEntity::class, InvestmentEntryEntity::class,
         SplitEntity::class, SummaryEntity::class, DocumentEntity::class, ArchiveIndexEntity::class,
-        SyncMetaEntity::class, SyncOutboxEntity::class, SyncFlagEntity::class,
+        SyncMetaEntity::class, SyncOutboxEntity::class, SyncFlagEntity::class, TaughtPatternEntity::class,
     ],
     views = [ExpenseLine::class],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -34,6 +34,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun investments(): InvestmentDao
     abstract fun extras(): ExtrasDao
     abstract fun sync(): SyncDao
+    abstract fun taught(): TaughtPatternDao
 
     companion object {
         fun create(context: Context): AppDatabase {
@@ -42,7 +43,7 @@ abstract class AppDatabase : RoomDatabase() {
             return Room.databaseBuilder(context, AppDatabase::class.java, "kosh.db")
                 .openHelperFactory(SupportOpenHelperFactory(passphrase))
                 // Upgrades keep every existing transaction: explicit migrations only, never destructive.
-                .addMigrations(Migrations.V1_TO_V2, Migrations.V2_TO_V3)
+                .addMigrations(Migrations.V1_TO_V2, Migrations.V2_TO_V3, Migrations.V3_TO_V4)
                 .addCallback(Migrations.TRIGGERS_CALLBACK)
                 .build()
         }

@@ -45,7 +45,7 @@ object SeedData {
         addAll(cat("transfers", "Transfers", "swap_horiz",
             "self" to "Own accounts", "ccbill" to "Credit card bill", "cash" to "Cash withdrawal", "cashdep" to "Cash deposit", "adjust" to "Balance adjustment", "people" to "To people", kind = Kind.TRANSFER))
         addAll(cat("income", "Income", "payments",
-            "salary" to "Salary", "interest" to "Interest", "refunds" to "Refunds", "cashback" to "Cashback", "other" to "Other income", kind = Kind.INCOME))
+            "salary" to "Salary", "interest" to "Interest", "refunds" to "Refunds", "cashback" to "Cashback", "reimbursement" to "Reimbursement", "other" to "Other income", kind = Kind.INCOME))
     }
 
     const val FALLBACK_EXPENSE = "other"

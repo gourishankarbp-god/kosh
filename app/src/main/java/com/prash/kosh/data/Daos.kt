@@ -154,6 +154,7 @@ interface RawMessageDao {
     @Query("SELECT * FROM raw_messages WHERE transactionId = :txnId ORDER BY receivedAt") fun observeForTxn(txnId: Long): Flow<List<RawMessageEntity>>
     @Query("SELECT * FROM raw_messages WHERE outcome = 'IGNORED' ORDER BY receivedAt DESC LIMIT 300") fun observeIgnored(): Flow<List<RawMessageEntity>>
     @Query("SELECT * FROM raw_messages WHERE id = :id") suspend fun get(id: Long): RawMessageEntity?
+    @Query("SELECT * FROM raw_messages WHERE outcome = 'IGNORED' AND body != '' ORDER BY receivedAt") suspend fun ignoredWithBody(): List<RawMessageEntity>
     @Query("SELECT * FROM raw_messages WHERE transactionId = :txnId") suspend fun forTxn(txnId: Long): List<RawMessageEntity>
     /** Retention: drop message text older than the cutoff but keep the hash, so re-imports are still skipped. */
     @Query("UPDATE raw_messages SET body = '' WHERE receivedAt < :cutoff AND body != ''") suspend fun purgeBodiesBefore(cutoff: Long): Int
@@ -206,6 +207,17 @@ interface KeywordRuleDao {
     @Query("SELECT * FROM keyword_rules ORDER BY sortOrder") suspend fun all(): List<KeywordRuleEntity>
     @Insert suspend fun insertAll(items: List<KeywordRuleEntity>)
     @Query("DELETE FROM keyword_rules") suspend fun clear()
+}
+
+@Dao
+interface TaughtPatternDao {
+    @Insert suspend fun insert(p: TaughtPatternEntity): Long
+    @Query("DELETE FROM taught_patterns WHERE id = :id") suspend fun delete(id: Long)
+    @Query("SELECT * FROM taught_patterns ORDER BY createdAt DESC") fun observeAll(): Flow<List<TaughtPatternEntity>>
+    @Query("SELECT * FROM taught_patterns") suspend fun all(): List<TaughtPatternEntity>
+    @Query("UPDATE taught_patterns SET matchCount = matchCount + 1, lastMatchedAt = :at WHERE id = :id") suspend fun noteMatch(id: Long, at: Long)
+    @Insert suspend fun insertAll(items: List<TaughtPatternEntity>)
+    @Query("DELETE FROM taught_patterns") suspend fun clear()
 }
 
 @Dao

@@ -73,6 +73,7 @@ class Repository(val db: AppDatabase, var notifier: Notifier = Notifier.None) {
             },
             keywordRules = db.keywordRules().all().map { it.keyword to it.categoryId },
             categoryKinds = categories.associate { it.id to SeedData.Kind.valueOf(it.kind) },
+            taught = db.taught().all().map { it.toPattern() },
         )
         return RecognitionEngine(rules).also { engineCache = it }
     }
@@ -116,7 +117,9 @@ class Repository(val db: AppDatabase, var notifier: Notifier = Notifier.None) {
         val r = result.recognition
         val f = r.fields
         val now = System.currentTimeMillis()
-        val accountId = f.accountLast4?.let { resolveAccount(f.bank, it, f.method) }
+        val taughtAccount = r.taughtAccountId?.let { db.accounts().get(it) }
+        val accountId = taughtAccount?.id ?: f.accountLast4?.let { resolveAccount(f.bank, it, f.method) }
+        r.taughtPatternId?.let { db.taught().noteMatch(it, now) }
 
         val window = DuplicateDetector.WINDOW_MILLIS
         val candidates = (txns.nearby(f.amountPaise, r.txnDateMillis - window, r.txnDateMillis + window) +
@@ -157,7 +160,7 @@ class Repository(val db: AppDatabase, var notifier: Notifier = Notifier.None) {
         }
         val entity = TransactionEntity(
             type = r.type.name, direction = f.direction.name, status = status.name, amountPaise = f.amountPaise,
-            dateMillis = r.txnDateMillis, accountId = accountId, accountLast4 = f.accountLast4,
+            dateMillis = r.txnDateMillis, accountId = accountId, accountLast4 = f.accountLast4 ?: taughtAccount?.last4,
             merchantKey = r.merchant?.key, merchantName = r.merchant?.displayName, categoryId = r.categoryId,
             method = f.method.name, reference = f.reference, confidence = r.confidence, sources = input.source.name,
             linkedTxnId = linked, createdAt = now, updatedAt = now, toAccountId = toAccount,
@@ -280,6 +283,54 @@ class Repository(val db: AppDatabase, var notifier: Notifier = Notifier.None) {
         invalidateRules()
     }
 
+    // ------------------------------------------------------------------ taught message formats
+
+    /** What teaching did, for the confirmation message. */
+    data class TeachResult(val patternId: Long, val readNow: Int, val updated: Int)
+
+    /**
+     * Saves a message format the owner taught, then re-reads skipped messages that match it
+     * (they go to Check). If [fromRawId] is already attached to a transaction, that transaction
+     * gets the taught type, category and payer (its status is left as it is).
+     */
+    suspend fun teach(p: TaughtPatternEntity, fromRawId: Long?): TeachResult = ingestLock.withLock {
+        val id = db.taught().insert(p.copy(id = 0))
+        invalidateRules()
+        val engine = engine()
+        var readNow = 0
+        var updated = 0
+        db.withTransaction {
+            val source = fromRawId?.let { raws.get(it) }
+            val linkedTxn = source?.transactionId?.let { txns.get(it) }
+            if (linkedTxn != null) {
+                val now = System.currentTimeMillis()
+                val acct = p.accountId?.let { db.accounts().get(it) }
+                val after = linkedTxn.copy(
+                    type = p.type, direction = p.direction, categoryId = p.categoryId,
+                    merchantKey = "taught$id", merchantName = p.name,
+                    accountId = acct?.id ?: linkedTxn.accountId, accountLast4 = acct?.last4 ?: linkedTxn.accountLast4,
+                    updatedAt = now,
+                )
+                txns.update(after)
+                audit(after.id, "RULE_APPLIED", linkedTxn, after)
+                db.taught().noteMatch(id, now)
+                updated++
+            }
+            for (raw in raws.ignoredWithBody()) {
+                val input = RawInput(runCatching { CaptureSource.valueOf(raw.source) }.getOrDefault(CaptureSource.SMS), raw.sender, raw.body, raw.receivedAt)
+                val result = engine.recognise(input)
+                if (result is EngineResult.Recognised && result.recognition.taughtPatternId == id) {
+                    post(result, input, raw.copy(ignoreReason = null))
+                    readNow++
+                }
+            }
+        }
+        if (readNow + updated > 0) onLocalChange()
+        TeachResult(id, readNow, updated)
+    }
+
+    suspend fun deleteTaught(id: Long) { db.taught().delete(id); invalidateRules() }
+
     suspend fun saveKeywordRule(r: KeywordRuleEntity) { db.keywordRules().upsert(r); invalidateRules() }
     suspend fun deleteKeywordRule(id: Long) { db.keywordRules().delete(id); invalidateRules() }
     suspend fun saveCategory(c: CategoryEntity) { db.categories().upsert(c); invalidateRules() }
@@ -317,3 +368,10 @@ class Repository(val db: AppDatabase, var notifier: Notifier = Notifier.None) {
 
     suspend fun saveAccount(a: AccountEntity) { if (a.id == 0L) db.accounts().insert(a) else db.accounts().update(a) }
 }
+
+/** Database row -> engine rule. */
+fun TaughtPatternEntity.toPattern() = com.prash.kosh.engine.TaughtPattern(
+    id = id, name = name, sender = sender, keywords = keywordList(),
+    direction = com.prash.kosh.engine.Direction.valueOf(direction), type = TxnType.valueOf(type),
+    categoryId = categoryId, amountIndex = amountIndex, accountId = accountId,
+)

@@ -92,7 +92,7 @@ private fun defaultCategory(type: String) = when (type) {
 /** Add (txnId == null) or edit a transaction. Every save of an existing one is audited. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun EditTransactionScreen(main: MainViewModel, txnId: Long?, onDone: () -> Unit) {
+fun EditTransactionScreen(main: MainViewModel, txnId: Long?, onTeach: (Long) -> Unit = {}, onDone: () -> Unit) {
     val repo = main.repo
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -201,7 +201,7 @@ fun EditTransactionScreen(main: MainViewModel, txnId: Long?, onDone: () -> Unit)
         }
         original?.let { o -> if (o.type == "EXPENSE") SplitSection(main, o) }
         original?.let { o -> PlanActions(main, o) }
-        original?.let { HistorySection(main, it) }
+        original?.let { HistorySection(main, it, onTeach) }
         Spacer(Modifier.height(40.dp))
     }
 
@@ -269,14 +269,15 @@ private fun Field(label: String, value: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun HistorySection(main: MainViewModel, t: TransactionEntity) {
+private fun HistorySection(main: MainViewModel, t: TransactionEntity, onTeach: (Long) -> Unit) {
     val raw by main.repo.db.rawMessages().observeForTxn(t.id).collectAsState(initial = emptyList())
     val audit by main.repo.db.audit().observeForTxn(t.id).collectAsState(initial = emptyList())
     SectionCard(title = "Source messages") {
         if (raw.isEmpty()) Text("Entered by hand", fontSize = 13.sp)
         raw.forEach {
             Text("${it.source} · ${it.sender} · ${formatDayTime(it.receivedAt)}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(it.body, fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
+            Text(it.body, fontSize = 12.sp, modifier = Modifier.padding(bottom = if (it.body.isNotBlank()) 0.dp else 8.dp))
+            if (it.body.isNotBlank()) TextButton(onClick = { onTeach(it.id) }) { Text("Teach Kosh this message type") }
         }
         t.reference?.let { Text("Reference: $it", fontSize = 12.sp) }
     }
